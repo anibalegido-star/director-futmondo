@@ -1,0 +1,93 @@
+name: Director Deportivo
+
+on:
+  schedule:
+    # 06:17 y 18:17 en Madrid (invierno). GitHub puede retrasarlo unos minutos.
+    - cron: "17 5,17 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: director
+  cancel-in-progress: false
+
+jobs:
+  analizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FUTMONDO_TOKEN: ${{ secrets.FUTMONDO_TOKEN }}
+      FUTMONDO_USER_ID: ${{ secrets.FUTMONDO_USER_ID }}
+      FUTMONDO_CHAMPIONSHIP_ID: ${{ secrets.FUTMONDO_CHAMPIONSHIP_ID }}
+      FUTMONDO_USERTEAM_ID: ${{ secrets.FUTMONDO_USERTEAM_ID }}
+      DIRECTOR_KEY: ${{ secrets.DIRECTOR_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Recuperar el histórico de la última ejecución
+        uses: actions/cache/restore@v4
+        with:
+          path: data/director.db
+          key: director-db-${{ github.run_id }}
+          restore-keys: director-db-
+
+      - name: Si no hay histórico, partir de la semilla cifrada
+        run: |
+          if [ ! -f data/director.db ] && [ -f seed/director.db.enc ]; then
+            mkdir -p data
+            python -m fm.crypto descifrar seed/director.db.enc data/director.db
+            echo "Histórico restaurado desde la semilla"
+          fi
+
+      - name: Descargar y analizar
+        run: |
+          mkdir -p public
+          cp -r site/. public/
+          sed -i "s|__REPO__|${GITHUB_REPOSITORY}|" public/index.html
+          python run.py --sin-panel --exportar public/data.enc
+
+      - name: Guardar el histórico para la próxima ejecución
+        uses: actions/cache/save@v4
+        with:
+          path: data/director.db
+          key: director-db-${{ github.run_id }}
+
+      - name: Copia de seguridad cifrada del histórico
+        run: |
+          mkdir -p backup
+          python -m fm.crypto cifrar data/director.db backup/director.db.enc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historico-cifrado
+          path: backup/director.db.enc
+          retention-days: 30
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  publicar:
+    needs: analizar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

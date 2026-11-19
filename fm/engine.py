@@ -1,0 +1,509 @@
+"""Motor del Director Deportivo.
+
+Toma la última captura + el histórico y produce un "briefing": situación,
+decisiones priorizadas, mercado, clausulazos, blindaje, ventas, rivales y
+estrategia. Todo son recomendaciones: la decisión y la ejecución son tuyas.
+"""
+
+import json
+import statistics
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+from .metrics import (ROLES, best_xi, num, parse_dt, percentile, player_metrics, xi_gain)
+
+TOTAL_ROUNDS = 38
+BANDS = [(0, 5e6, "<5M"), (5e6, 15e6, "5-15M"), (15e6, 40e6, "15-40M"), (40e6, 1e12, ">40M")]
+# Valores del análisis de 54 pujas reales (PROYECTO_FUTMONDO.md) si aún no hay datos propios
+DEFAULT_OVERBID = {"<5M": (0.20, 0.47), "5-15M": (0.12, 0.30), "15-40M": (0.08, 0.20), ">40M": (0.03, 0.06)}
+
+
+def swap_info(squad, cand, key="proj"):
+    """Ganancia del once y a quién desplazaría el candidato."""
+    base, ids, _ = best_xi(squad, key)
+    new, new_ids, _ = best_xi(squad + [cand], key)
+    out_ids = set(ids) - set(new_ids)
+    names = [p["name"] for p in squad if p["id"] in out_ids]
+    return round(new - base, 2), names
+
+
+def band_of(v):
+    for lo, hi, name in BANDS:
+        if lo <= v < hi:
+            return name
+    return ">40M"
+
+
+def M(v):
+    return round(num(v) / 1e6, 2)
+
+
+# ------------------------------------------------------------------ histórico
+
+def _history(con, latest_sid):
+    """Valor de cada jugador en capturas anteriores, para tendencias."""
+    rows = con.execute("""
+        SELECT s.captured_at, ps.player_id, ps.value, ps.clause_real, ps.owner
+        FROM player_snap ps JOIN snapshots s ON s.id = ps.snapshot_id
+        ORDER BY s.captured_at""").fetchall()
+    hist = defaultdict(list)
+    for ts, pid, value, creal, owner in rows:
+        hist[pid].append((parse_dt(ts), num(value), num(creal), owner))
+    return hist
+
+
+def _trend(hist, pid, now, days):
+    series = hist.get(pid) or []
+    target = now - timedelta(days=days)
+    past = [v for (ts, v, _, _) in series if ts and ts <= target + timedelta(days=1) and v > 0]
+    cur = [v for (ts, v, _, _) in series if ts and ts > now - timedelta(days=1)]
+    if not past or not cur:
+        return None
+    ref = past[-1]
+    return round((cur[-1] - ref) / ref * 100, 1)
+
+
+def _rounds(con):
+    out = defaultdict(list)
+    for pid, rnd, pts, home, starter in con.execute(
+            "SELECT player_id, round, points, home, starter FROM rounds"):
+        out[pid].append({"round": rnd, "points": pts, "home": home, "starter": starter})
+    return out
+
+
+# -------------------------------------------------------------- pujas de la liga
+
+def bid_intel(con, teams_by_id):
+    """Cómo puja la liga: sobreprecio sobre el segundo postor y sobre el valor del jugador."""
+    values = defaultdict(list)
+    for ts, pid, v in con.execute("""SELECT s.captured_at, ps.player_id, ps.value FROM player_snap ps
+                                      JOIN snapshots s ON s.id=ps.snapshot_id"""):
+        values[pid].append((parse_dt(ts), num(v)))
+    over2 = defaultdict(list)
+    prem = defaultdict(list)
+    managers = defaultdict(lambda: {"ganadas": 0, "pujas": 0, "gastado": 0.0, "sobreprecios": []})
+    clausulazos = defaultdict(int)
+    recent = []
+    for row in con.execute("SELECT * FROM news ORDER BY created DESC"):
+        price = num(row["price"])
+        created = parse_dt(row["created"])
+        bids = json.loads(row["bids_json"] or "[]")
+        buyer = teams_by_id.get(row["buyer_id"], row["buyer"])
+        if row["buyer_id"] and row["seller_id"]:
+            clausulazos[buyer] += 1
+        if row["buyer_id"]:
+            managers[buyer]["ganadas"] += 1
+            managers[buyer]["gastado"] += price
+            recent.append({"fecha": row["created"][:10], "comprador": buyer,
+                           "vendedor": teams_by_id.get(row["seller_id"], row["seller"]) if row["seller_id"] else "Mercado",
+                           "jugador": row["player_name"], "precio_M": M(price),
+                           "tipo": "cláusula/traspaso" if row["seller_id"] else "mercado"})
+        for b in bids:
+            u = (b.get("u") or {})
+            managers[teams_by_id.get(u.get("_id"), u.get("name"))]["pujas"] += 1
+        if row["buyer_id"] and bids:
+            second = max(num(b.get("bid")) for b in bids)
+            if second > 0 and price >= second:
+                pct = price / second - 1
+                over2[band_of(price)].append(pct)
+                managers[buyer]["sobreprecios"].append(pct)
+        if row["buyer_id"] and not row["seller_id"] and created:
+            cand = [(abs((ts - created).total_seconds()), v) for ts, v in values.get(row["player_id"], [])
+                    if ts and v > 0 and ts <= created and (created - ts).days <= 4]
+            if cand:
+                v = min(cand)[1]
+                prem[band_of(v)].append(price / v - 1)
+    bands = {}
+    for _, _, name in BANDS:
+        o, p = over2.get(name, []), prem.get(name, [])
+        d_med, d_p75 = DEFAULT_OVERBID[name]
+        w = len(p) / (len(p) + 6)
+        med = (percentile(p, .5) if p else d_med) * w + d_med * (1 - w)
+        p75 = (percentile(p, .75) if p else d_p75) * w + d_p75 * (1 - w)
+        bands[name] = {
+            "n_pujas": len(o),
+            "sobre_2o_mediana": round(percentile(o, .5), 3) if len(o) >= 3 else None,
+            "sobre_2o_p75": round(percentile(o, .75), 3) if len(o) >= 3 else None,
+            "n_valor": len(p),
+            "sobre_valor_mediana": round(med, 3),
+            "sobre_valor_p75": round(p75, 3),
+            "fuente": f"{len(p)} fichajes de tu liga + estimación inicial" if w < 0.6 else f"{len(p)} fichajes de tu liga",
+        }
+    mgr = []
+    for name, d in managers.items():
+        if not name:
+            continue
+        mgr.append({"equipo": name, "fichajes": d["ganadas"], "pujas_perdidas_vistas": d["pujas"],
+                    "gastado_M": M(d["gastado"]), "clausulazos": clausulazos.get(name, 0),
+                    "sobreprecio_mediano": round(statistics.median(d["sobreprecios"]), 3) if d["sobreprecios"] else None})
+    mgr.sort(key=lambda x: -x["fichajes"])
+    return {"tramos": bands, "managers": mgr, "recientes": recent[:40]}
+
+
+# ------------------------------------------------------------------ motor
+
+def build_briefing(con, snap, finanzas=None):
+    now = parse_dt(snap["captured_at"]) or datetime.now(timezone.utc)
+    latest_sid = con.execute("SELECT id FROM snapshots WHERE captured_at=?", (snap["captured_at"],)).fetchone()
+    latest_sid = latest_sid[0] if latest_sid else None
+    hist = _history(con, latest_sid)
+    rounds = _rounds(con)
+    summaries = snap.get("summaries") or {}
+    teams = sorted(snap["teams"], key=lambda t: -num(t.get("points")))
+    teams_by_id = {t["id"]: t["name"] for t in teams}
+    my_id = snap.get("my_team_id")
+    my_name = teams_by_id.get(my_id, "Mi equipo")
+    finanzas = finanzas or {}
+    fondos = num(finanzas.get("fondos")) or None
+    max_puja = num(finanzas.get("puja_maxima")) or fondos
+
+    season_rounds = max((int(num((p.get("average") or {}).get("matches")))
+                         for ro in snap["rosters"].values() for p in ro), default=0) or None
+
+    def enrich(p, owner):
+        m = player_metrics(p, summaries.get(p.get("id")), rounds.get(p.get("id")), season_rounds)
+        m["owner"] = owner
+        m["owner_name"] = teams_by_id.get(owner, "Mercado" if owner == "market" else owner)
+        m["trend7"] = _trend(hist, m["id"], now, 7)
+        m["trend30"] = _trend(hist, m["id"], now, 30)
+        m["rounds"] = [[r["round"], r["points"], 1 if r["starter"] else 0]
+                       for r in sorted(rounds.get(m["id"], []), key=lambda r: r["round"])][-12:]
+        return m
+
+    squads = {tid: [enrich(p, tid) for p in ro] for tid, ro in snap["rosters"].items()}
+    market = [enrich(p, "market") for p in snap.get("market") or []]
+    slug_to = {t.get("slug"): t for t in teams if t.get("slug")}
+    for p, raw in zip(market, snap.get("market") or []):
+        p["asking"] = num(raw.get("price"))
+        p["expires"] = raw.get("expirationDate")
+        seller = None if raw.get("computer") else slug_to.get(raw.get("userTeamSlug"))
+        p["seller"] = (seller["name"] if seller else raw.get("userTeam")) if not raw.get("computer") else None
+        p["mine"] = bool(seller and seller["id"] == my_id)
+    my_listed = [p for p in market if p.get("mine")]
+    market = [p for p in market if not p.get("mine")]
+    mine = squads.get(my_id, [])
+    current_round = max((p["matches"] for sq in squads.values() for p in sq), default=0)
+    remaining = max(TOTAL_ROUNDS - current_round, 1)
+
+    # ---- fuerza proyectada de cada equipo (once ideal)
+    strength = {}
+    for tid, sq in squads.items():
+        pts, ids, form = best_xi(sq, "proj")
+        pts_next, _, _ = best_xi(sq, "proj_next")
+        strength[tid] = {"xi": pts, "xi_proxima": pts_next, "ids": ids, "formacion": form}
+    my_xi_pts, my_xi_ids, my_form = best_xi(mine, "proj") if mine else (0, [], None)
+    my_xi_next, my_xi_next_ids, my_form_next = best_xi(mine, "proj_next") if mine else (0, [], None)
+
+    # ---- situación en la tabla
+    pos = next((i for i, t in enumerate(teams) if t["id"] == my_id), None)
+    tabla = []
+    for i, t in enumerate(teams):
+        st = strength.get(t["id"], {})
+        tabla.append({"pos": i + 1, "equipo": t["name"], "id": t["id"], "puntos": round(num(t["points"]), 1),
+                      "valor_M": M(t.get("team_value")), "xi_proyectado": st.get("xi"),
+                      "clausulazos_in": t.get("clauses_in"), "clausulazos_out": t.get("clauses_out"),
+                      "es_mio": t["id"] == my_id})
+    situacion = {"posicion": pos + 1 if pos is not None else None, "equipos": len(teams),
+                 "jornada_aprox": current_round, "jornadas_restantes": remaining,
+                 "mi_xi_proyectado": my_xi_pts, "mi_xi_proxima": my_xi_next, "formacion": my_form_next}
+    if pos is not None:
+        me = teams[pos]
+        objetivos = []
+        for j in range(max(0, pos - 3), pos):
+            t = teams[j]
+            gap = num(t["points"]) - num(me["points"])
+            diff_xi = round(my_xi_pts - strength.get(t["id"], {}).get("xi", 0), 1)
+            objetivos.append({"equipo": t["name"], "pos": j + 1, "gap": round(gap, 1),
+                              "pts_extra_por_jornada": round(gap / remaining, 1),
+                              "diferencia_xi": diff_xi,
+                              "lo_alcanzas_a_este_ritmo": diff_xi > 0 and diff_xi * remaining > gap})
+        situacion["objetivos"] = list(reversed(objetivos))
+        lider = teams[0]
+        situacion["gap_lider"] = round(num(lider["points"]) - num(me["points"]), 1)
+        situacion["pts_extra_por_jornada_lider"] = round(situacion["gap_lider"] / remaining, 1)
+        if pos + 1 < len(teams):
+            t = teams[pos + 1]
+            situacion["perseguidor"] = {"equipo": t["name"], "gap": round(num(me["points"]) - num(t["points"]), 1)}
+
+    # ---- posiciones: mis once vs la media de los once de la liga
+    league_role = defaultdict(list)
+    for tid, sq in squads.items():
+        ids = set(strength[tid]["ids"])
+        for role in ROLES:
+            vals = [p["proj"] for p in sq if p["id"] in ids and p["role"] == role]
+            if vals and tid != my_id:
+                league_role[role].append(sum(vals) / len(vals))
+    my_role = {}
+    for role in ROLES:
+        vals = [p["proj"] for p in mine if p["id"] in set(my_xi_ids) and p["role"] == role]
+        lg = statistics.mean(league_role[role]) if league_role[role] else 0
+        mv = sum(vals) / len(vals) if vals else 0
+        my_role[role] = {"mi_media_xi": round(mv, 2), "media_liga_xi": round(lg, 2),
+                         "diferencia": round(mv - lg, 2), "jugadores": sum(1 for p in mine if p["role"] == role)}
+    weakest = min(my_role, key=lambda r: my_role[r]["diferencia"]) if mine else None
+
+    intel = bid_intel(con, teams_by_id)
+
+    def bid_plan(p):
+        b = intel["tramos"][band_of(p["value"])]
+        floor = max(p["asking"], p["value"])
+        target = max(floor, p["value"] * (1 + b["sobre_valor_mediana"]))
+        aggressive = max(target, p["value"] * (1 + b["sobre_valor_p75"]))
+        return {"minimo_M": M(floor), "objetivo_M": M(target), "agresiva_M": M(aggressive),
+                "base": b["fuente"]}
+
+    # ---- mercado
+    mercado = []
+    for p in market:
+        gain, desplaza = swap_info(mine, p)
+        plan = bid_plan(p)
+        cost = plan["objetivo_M"] or M(p["asking"])
+        p_out = _public(p)
+        p_out.update({"mejora_xi": gain, "mejora_por_M": round(gain / cost, 3) if cost else 0,
+                      "precio_salida_M": M(p["asking"]), "puja": plan, "desplaza": desplaza,
+                      "vendedor": p["seller"] or "Mercado (máquina)", "expira": p["expires"],
+                      "asequible": (max_puja is None) or plan["objetivo_M"] * 1e6 <= max_puja})
+        p_out["veredicto"] = _verdict_market(p_out, p)
+        mercado.append(p_out)
+    mercado.sort(key=lambda x: (-{"PUJAR": 2, "VIGILAR": 1, "PASAR": 0}[x["veredicto"]], -x["mejora_xi"]))
+
+    # ---- clausulazos sobre rivales
+    clausulas = []
+    bloqueados = []
+    for tid, sq in squads.items():
+        if tid == my_id:
+            continue
+        rival_pts = num(next((t["points"] for t in teams if t["id"] == tid), 0))
+        star = max(sq, key=lambda x: x["points"]) if sq else None
+        for p in sq:
+            c = p["clause"]
+            if not c["max"]:
+                continue
+            if c["locked_until"]:
+                bloqueados.append({"jugador": p["name"], "equipo": p["owner_name"],
+                                   "clausula_M": M(c["max"]), "libre_desde": c["locked_until"][:16]})
+                continue
+            if p["matches"] < 3 or p["status"] in ("injured", "injured2") or p["absent_streak"] >= 3:
+                continue
+            gain, desplaza = swap_info(mine, p)
+            if gain <= 0.3:
+                continue
+            cost = (c["min"] + c["max"]) / 2
+            dep = round(p["points"] / rival_pts * 100, 1) if rival_pts else 0
+            above = pos is not None and 0 < teams.index(next(t for t in teams if t["id"] == tid)) < pos + 1 and \
+                teams.index(next(t for t in teams if t["id"] == tid)) >= pos - 3
+            item = _public(p)
+            item.update({
+                "equipo_rival": p["owner_name"], "clausula_min_M": M(c["min"]), "clausula_max_M": M(c["max"]),
+                "clausula_exacta": c["exact"], "clausula_subida": c["raised"],
+                "colchon_M": M(p["value"] - c["max"]),
+                "mejora_xi": gain, "mejora_por_M": round(gain / (cost / 1e6), 3) if cost else 0,
+                "desplaza": desplaza, "clausula_M": M(c["max"]),
+                "dependencia_rival_pct": dep if star and star["id"] == p["id"] else None,
+                "rival_directo": bool(above),
+                "asequible": fondos is None or c["max"] <= fondos,
+            })
+            bonus = 1 + (0.3 if above else 0) + ((dep / 100) if item["dependencia_rival_pct"] else 0)
+            item["score"] = round(item["mejora_por_M"] * bonus * 100, 2)
+            clausulas.append(item)
+    clausulas.sort(key=lambda x: -x["score"])
+
+    # ---- blindaje de mi plantilla
+    hunters = {t["id"]: (t.get("clauses_in") or 0) for t in teams if t["id"] != my_id}
+    max_hunt = max(hunters.values(), default=1) or 1
+    blindaje = []
+    xi_ids = set(my_xi_ids)
+    for p in mine:
+        c = p["clause"]
+        if not c["max"]:
+            continue
+        cm = max(c["max"] / 1e6, 0.5)
+        best = (0.0, None, 0.0)
+        for tid, sq in squads.items():
+            if tid == my_id:
+                continue
+            g = xi_gain(sq, p, "proj")
+            eff = g / cm
+            weighted = eff * (0.5 + 0.5 * hunters.get(tid, 0) / max_hunt)
+            if weighted > best[2]:
+                best = (g, tid, weighted)
+        in_xi = p["id"] in xi_ids
+        loss = xi_gain([q for q in mine if q["id"] != p["id"]], p, "proj") if in_xi else 0
+        item = _public(p)
+        item.update({"clausula_M": M(c["max"]), "clausula_exacta": c["exact"], "valor_M": M(p["value"]),
+                     "en_mi_once": in_xi, "perdida_si_me_lo_quitan": loss,
+                     "interesado": teams_by_id.get(best[1]), "ganancia_interesado": round(best[0], 2),
+                     "eficiencia_para_rival": round(best[0] / cm, 3), "riesgo": round(best[2], 3),
+                     "bloqueado_hasta": c["locked_until"]})
+        if c["locked_until"]:
+            item["nivel"] = "PROTEGIDO"
+        elif best[0] >= 1.0 and best[2] >= 0.25 and loss >= 1:
+            item["nivel"] = "ALTO"
+        elif best[0] >= 0.5 and best[2] >= 0.1 and in_xi:
+            item["nivel"] = "MEDIO"
+        elif loss >= 5 and best[2] >= 0.05:
+            item["nivel"] = "MEDIO"  # pieza clave: aunque sea caro, vigílalo
+        else:
+            item["nivel"] = "BAJO"
+        blindaje.append(item)
+    blindaje.sort(key=lambda x: (-["BAJO", "PROTEGIDO", "MEDIO", "ALTO"].index(x["nivel"]), -x["riesgo"]))
+
+    # ---- ventas / descartes
+    ventas = []
+    xi_set = set(my_xi_ids)
+    for p in mine:
+        reasons = []
+        if p["id"] not in xi_set:
+            reasons.append("no entra en tu once ideal")
+        if p["trend7"] is not None and p["trend7"] < -5:
+            reasons.append(f"su valor cae un {abs(p['trend7'])}% en 7 días")
+        if p["form_delta"] <= -1.5:
+            reasons.append(f"forma a la baja ({p['avg5']} últimos 5 vs {p['avg']} de media)")
+        if p["starter_rate"] is not None and p["starter_rate"] < 0.4:
+            reasons.append("pierde la titularidad")
+        elif p["played_last5"] is not None and p["played_last5"] <= 2 and p["matches"] < (season_rounds or 0) * 0.6:
+            reasons.append(f"apenas juega ({p['played_last5']} de las últimas 5 jornadas, {p['matches']} partidos en total)")
+        if p["status"] in ("injured", "injured2"):
+            reasons.append("lesionado")
+        if not reasons or (p["id"] in xi_set and len(reasons) < 2):
+            continue
+        item = _public(p)
+        item.update({"motivos": reasons, "valor_M": M(p["value"]),
+                     "accion": "VENDER" if p["id"] not in xi_set and p["value"] >= 2e6 else "VIGILAR"})
+        ventas.append(item)
+    ventas.sort(key=lambda x: (x["accion"] != "VENDER", -x["valor_M"]))
+
+    # ---- rivales
+    rivales = []
+    mgr_by = {m["equipo"]: m for m in intel["managers"]}
+    for i, t in enumerate(teams):
+        if t["id"] == my_id:
+            continue
+        sq = squads.get(t["id"], [])
+        if not sq:
+            continue
+        star = max(sq, key=lambda x: x["points"])
+        sin_estrella = round(strength[t["id"]]["xi"] - best_xi([p for p in sq if p["id"] != star["id"]], "proj")[0], 1)
+        dep = round(star["points"] / num(t["points"]) * 100, 1) if num(t["points"]) else 0
+        roles = {r: [p["proj"] for p in sq if p["id"] in set(strength[t["id"]]["ids"]) and p["role"] == r] for r in ROLES}
+        weak = min((r for r in ROLES if roles[r]), key=lambda r: sum(roles[r]) / len(roles[r]), default=None)
+        injured = [p["name"] for p in sq if p["status"] in ("injured", "injured2") and p["id"] in set(strength[t["id"]]["ids"])]
+        m = mgr_by.get(t["name"], {})
+        rivales.append({
+            "pos": i + 1, "equipo": t["name"], "puntos": round(num(t["points"]), 1),
+            "gap_conmigo": round(num(t["points"]) - num(teams[pos]["points"]), 1) if pos is not None else None,
+            "valor_M": M(t.get("team_value")), "xi_proyectado": strength[t["id"]]["xi"],
+            "estrella": star["name"], "dependencia_pct": dep, "posicion_debil": weak,
+            "lesionados_en_once": injured, "clausulazos_hechos": t.get("clauses_in"),
+            "clausulazos_sufridos": t.get("clauses_out"), "fichajes_vistos": m.get("fichajes"),
+            "sobreprecio_mediano": m.get("sobreprecio_mediano"),
+            "perfil": _profile(t, m, dep), "sin_estrella": sin_estrella,
+        })
+
+    # ---- decisiones priorizadas
+    decisiones = _decisions(mercado, clausulas, blindaje, ventas, mine, my_xi_next_ids, fondos, situacion)
+
+    return {
+        "generado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "captura": snap["captured_at"],
+        "mi_equipo": my_name,
+        "finanzas": {"fondos_M": M(fondos) if fondos else None,
+                     "puja_maxima_M": M(max_puja) if max_puja else None,
+                     "fuente": "finanzas.json" if fondos else "sin datos (rellena finanzas.json)"},
+        "situacion": situacion, "tabla": tabla, "posiciones": my_role, "posicion_debil": weakest,
+        "mi_once": [_public(p) | {"en_once": p["id"] in set(my_xi_next_ids)} for p in
+                    sorted(mine, key=lambda x: (ROLES.index(x["role"]) if x["role"] in ROLES else 9, -x["proj"]))],
+        "decisiones": decisiones, "mercado": mercado,
+        "mis_jugadores_en_venta": [_public(p) | {"precio_salida_M": M(p["asking"])} for p in my_listed], "clausulazos": clausulas[:30],
+        "bloqueados": bloqueados, "blindaje": blindaje, "ventas": ventas, "rivales": rivales,
+        "pujas_liga": intel, "historico": {"capturas": con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0],
+                                           "desde": con.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0]},
+        "errores_captura": snap.get("errors") or [],
+    }
+
+
+def _public(p):
+    keys = ("id", "name", "role", "role2", "club", "status", "points", "avg", "avg5", "matches",
+            "participation", "played_last5", "absent_streak",
+            "form_delta", "regularity", "starter_rate", "proj", "proj_next", "trend7", "trend30",
+            "owner_name")
+    out = {k: p.get(k) for k in keys}
+    out["value_M"] = M(p["value"])
+    out["fitness"] = p.get("fitness")
+    out["rounds"] = p.get("rounds") or []
+    return out
+
+
+def _verdict_market(item, p):
+    if p["status"] in ("injured", "injured2") or p["matches"] < 2 or p["absent_streak"] >= 3:
+        return "PASAR"
+    if p["absent_streak"] >= 2 or p["status"] == "doubt":
+        return "VIGILAR" if item["mejora_xi"] >= 0.4 else "PASAR"
+    if item["mejora_xi"] >= 1.0 and item["asequible"]:
+        return "PUJAR"
+    if item["mejora_xi"] >= 0.4 or (p["trend7"] or 0) > 8:
+        return "VIGILAR"
+    return "PASAR"
+
+
+def _profile(t, m, dep):
+    tags = []
+    if (t.get("clauses_in") or 0) >= 60:
+        tags.append("cazador de cláusulas")
+    if (m.get("sobreprecio_mediano") or 0) >= 0.15:
+        tags.append("puja agresivo")
+    if dep >= 15:
+        tags.append("depende de su estrella")
+    if (t.get("clauses_out") or 0) >= 60:
+        tags.append("le quitan muchos jugadores")
+    return tags or ["perfil discreto"]
+
+
+def _decisions(mercado, clausulas, blindaje, ventas, mine, xi_next_ids, fondos, situacion):
+    out = []
+    for p in [x for x in mercado if x["veredicto"] == "PUJAR"][:3]:
+        out.append({"tipo": "PUJAR", "prioridad": round(60 + p["mejora_xi"] * 10, 1),
+                    "titulo": f"Pujar por {p['name']} ({p['role']}, {p['club']})",
+                    "detalle": (f"Mejora tu once en +{p['mejora_xi']} pts/jornada. Puja objetivo "
+                                f"{p['puja']['objetivo_M']}M (mínimo {p['puja']['minimo_M']}M, agresiva "
+                                f"{p['puja']['agresiva_M']}M)."),
+                    "expira": p["expira"], "jugador_id": p["id"]})
+    for p in [x for x in clausulas if x["asequible"] and x["mejora_xi"] >= 1.0][:3]:
+        rango = (f"{p['clausula_max_M']}M" if p["clausula_exacta"]
+                 else f"{p['clausula_max_M']}M (probable, confirma en la app)" if p["clausula_min_M"] == p["clausula_max_M"]
+                 else f"{p['clausula_min_M']}-{p['clausula_max_M']}M (confirma en la app)")
+        extra = " Es de un rival directo." if p["rival_directo"] else ""
+        if p.get("dependencia_rival_pct"):
+            extra += f" Es su estrella ({p['dependencia_rival_pct']}% de sus puntos)."
+        out.append({"tipo": "CLAUSULAZO", "prioridad": round(50 + p["score"] / 2, 1),
+                    "titulo": f"Clausulazo a {p['name']} ({p['equipo_rival']})",
+                    "detalle": f"Cláusula {rango}. +{p['mejora_xi']} pts/jornada en tu once.{extra}",
+                    "jugador_id": p["id"]})
+    # no tiene sentido gastar en blindar a quien casi no juega
+    for p in [x for x in blindaje if x["nivel"] == "ALTO" and (x.get("played_last5") is None or x["played_last5"] >= 3)][:3]:
+        out.append({"tipo": "BLINDAR", "prioridad": round(55 + p["perdida_si_me_lo_quitan"] * 8, 1),
+                    "titulo": f"Subir la cláusula de {p['name']}",
+                    "detalle": (f"Cláusula de solo {p['clausula_M']}M. A {p['interesado']} le subiría su once "
+                                f"+{p['ganancia_interesado']} pts/jornada y perderlo te costaría "
+                                f"{p['perdida_si_me_lo_quitan']} pts/jornada."),
+                    "jugador_id": p["id"]})
+    for p in [x for x in ventas if x["accion"] == "VENDER"][:2]:
+        out.append({"tipo": "VENDER", "prioridad": 35 + min(p["valor_M"], 30) / 2,
+                    "titulo": f"Vender a {p['name']} ({p['valor_M']}M)",
+                    "detalle": "; ".join(p["motivos"]).capitalize() + ". Libera dinero para reforzar el once.",
+                    "jugador_id": p["id"]})
+    for p in mine:
+        if p["status"] in ("injured", "injured2", "redcard", "doubt") and p["proj"] >= 6:
+            out.append({"tipo": "ALINEACIÓN", "prioridad": 45 if p["status"] != "doubt" else 30,
+                        "titulo": f"{p['name']}: {_status_es(p['status'])}",
+                        "detalle": "Revisa la alineación de la próxima jornada.", "jugador_id": p["id"]})
+    if not fondos:
+        out.append({"tipo": "DATOS", "prioridad": 20, "titulo": "Introduce tus fondos en finanzas.json",
+                    "detalle": "La API no da tu saldo; sin él no puedo filtrar qué pujas y cláusulas te puedes permitir."})
+    out.sort(key=lambda d: -d["prioridad"])
+    return out
+
+
+def _status_es(s):
+    return {"injured": "lesionado", "injured2": "lesionado", "redcard": "sancionado",
+            "doubt": "duda", "yellowcard": "apercibido"}.get(s, s)
