@@ -281,7 +281,8 @@ def build_briefing(con, snap, finanzas=None):
                 continue
             if c["locked_until"]:
                 bloqueados.append({"jugador": p["name"], "equipo": p["owner_name"],
-                                   "clausula_M": M(c["max"]), "libre_desde": c["locked_until"][:16]})
+                                   "clausula_M": M(c["max"]), "libre_desde": c["locked_until"][:16],
+                                   "id": p["id"], "role": p["role"], "club": p["club"]})
                 continue
             if p["matches"] < 3 or p["status"] in ("injured", "injured2") or p["absent_streak"] >= 3:
                 continue
@@ -400,8 +401,23 @@ def build_briefing(con, snap, finanzas=None):
             "perfil": _profile(t, m, dep), "sin_estrella": sin_estrella,
         })
 
+    # ---- traspasos en curso: la API marca la cláusula pagada (transferred) y el cambio
+    # de equipo se hace a medianoche (transferDate). No dice quién la pagó.
+    pendientes = list(bloqueados)
+    for p in mine:
+        if p["clause"]["locked_until"]:
+            pendientes.append({"jugador": p["name"], "equipo": my_name, "clausula_M": M(p["clause"]["max"]),
+                               "libre_desde": p["clause"]["locked_until"][:16], "id": p["id"],
+                               "role": p["role"], "club": p["club"], "mio": True})
+
     # ---- decisiones priorizadas
     decisiones = _decisions(mercado, clausulas, blindaje, ventas, mine, my_xi_next_ids, fondos, situacion)
+    for t in pendientes:
+        if t.get("mio"):
+            decisiones.insert(0, {"tipo": "ALERTA", "prioridad": 99,
+                                  "titulo": f"Te han pagado la cláusula de {t['jugador']}",
+                                  "detalle": f"Se va de tu equipo a las 00:00 por {t['clausula_M']}M. Busca sustituto.",
+                                  "jugador_id": t["id"]})
 
     return {
         "generado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -414,8 +430,13 @@ def build_briefing(con, snap, finanzas=None):
         "mi_once": [_public(p) | {"en_once": p["id"] in set(my_xi_next_ids)} for p in
                     sorted(mine, key=lambda x: (ROLES.index(x["role"]) if x["role"] in ROLES else 9, -x["proj"]))],
         "decisiones": decisiones, "mercado": mercado,
-        "mis_jugadores_en_venta": [_public(p) | {"precio_salida_M": M(p["asking"])} for p in my_listed], "clausulazos": clausulas[:30],
-        "bloqueados": bloqueados, "blindaje": blindaje, "ventas": ventas, "rivales": rivales,
+        "mis_jugadores_en_venta": [_public(p) | {"precio_salida_M": M(p["asking"]), "expira": p["expires"]}
+                                   for p in my_listed] + [
+            {"id": x.get("id"), "name": x.get("name"), "role": x.get("role"), "club": x.get("team"),
+             "value_M": M(x.get("value")), "precio_salida_M": M(x.get("price")), "expira": x.get("expirationDate"),
+             "pujas": len(x.get("bids") or [])}
+            for x in (snap.get("my_market") or []) if x.get("id") not in {q["id"] for q in my_listed}], "clausulazos": clausulas[:30],
+        "bloqueados": bloqueados, "traspasos_pendientes": pendientes, "blindaje": blindaje, "ventas": ventas, "rivales": rivales,
         "pujas_liga": intel, "historico": {"capturas": con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0],
                                            "desde": con.execute("SELECT MIN(captured_at) FROM snapshots").fetchone()[0]},
         "errores_captura": snap.get("errors") or [],
@@ -429,6 +450,9 @@ def _public(p):
             "owner_name")
     out = {k: p.get(k) for k in keys}
     out["value_M"] = M(p["value"])
+    out["change_M"] = round(num(p.get("change")) / 1e6, 3)
+    out["change_pct"] = round(num(p.get("change")) / (num(p["value"]) - num(p.get("change"))) * 100, 1) \
+        if num(p["value"]) - num(p.get("change")) > 0 else None
     out["fitness"] = p.get("fitness")
     out["rounds"] = p.get("rounds") or []
     return out
