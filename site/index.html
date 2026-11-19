@@ -50,10 +50,10 @@ button{font:inherit;color:inherit}
 .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 8px;border-radius:6px;white-space:nowrap}
 .t-PUJAR{color:var(--good);background:var(--good-bg)}
 .t-CLAUSULAZO{color:var(--blue);background:var(--blue-bg)}
-.t-BLINDAR,.t-ALINEACIÓN,.t-ALTO{color:var(--bad);background:var(--bad-bg)}
+.t-BLINDAR,.t-ALINEACIÓN,.t-ALTO,.t-ALERTA{color:var(--bad);background:var(--bad-bg)}
 .t-VENDER,.t-VIGILAR,.t-MEDIO{color:var(--amber);background:var(--amber-bg)}
 .t-PASAR,.t-DATOS,.t-BAJO,.t-PROTEGIDO{color:var(--ink4);background:var(--glass-2)}
-.c-PUJAR{color:var(--good)}.c-CLAUSULAZO{color:var(--blue)}.c-BLINDAR,.c-ALINEACIÓN{color:var(--bad)}.c-VENDER,.c-VIGILAR{color:var(--amber)}.c-PASAR,.c-DATOS{color:var(--ink4)}
+.c-PUJAR{color:var(--good)}.c-CLAUSULAZO{color:var(--blue)}.c-BLINDAR,.c-ALINEACIÓN,.c-ALERTA{color:var(--bad)}.c-VENDER,.c-VIGILAR{color:var(--amber)}.c-PASAR,.c-DATOS{color:var(--ink4)}
 .dec{display:flex;gap:12px;align-items:center;padding:16px;cursor:pointer;width:100%;text-align:left}
 .dec .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
 .dec .title{font-size:15px;font-weight:600}
@@ -236,6 +236,15 @@ function memoText(){
 }
 
 /* ---------------- piezas ---------------- */
+function trendTxt(p, compact){
+  const parts = [];
+  if (p.change_pct != null && Math.abs(p.change_M) >= 0.001) {
+    const up = p.change_M > 0;
+    parts.push(`<span style="color:${up?"var(--good)":"var(--bad)"};font-weight:600">${up?"▲":"▼"} ${sg(p.change_pct)}% hoy</span>`);
+  }
+  if (p.trend7 != null && !compact) parts.push(`<span style="color:${p.trend7>=0?"var(--good)":"var(--bad)"}">${sg(p.trend7)}% 7 días</span>`);
+  return parts.join(" · ");
+}
 function spark(f){ if(!f||!f.length) return ""; return `<div class="spark" role="img" aria-label="Últimas jornadas: ${f.map(v=>nf(v)).join(", ")}">${f.map(v => `<i style="height:${Math.max(3,Math.min(30,Math.max(0,v)*2.2))}px;background:${v>=8?"var(--teal)":v>=4?"rgba(94,234,212,0.6)":"rgba(255,255,255,0.2)"}"></i>`).join("")}</div>`; }
 function header(title, sub, right=""){ return `<div class="between"><div class="stack" style="gap:2px"><span class="h1">${title}</span>${sub?`<span class="muted">${sub}</span>`:""}</div>${right}</div>`; }
 const refreshBtn = () => `<a class="icon-btn" href="https://github.com/${REPO}/actions/workflows/director.yml" target="_blank" rel="noopener" aria-label="Lanzar una actualización"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EAF2F0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg></a>`;
@@ -262,19 +271,30 @@ function viewHoy(){
   </div>
   <div class="grid2">
     <div class="glass card stack" style="gap:4px"><span class="small" style="font-weight:500">Once proyectado</span><span class="num" style="font-size:28px;font-weight:700">${nf(S.mi_xi_proxima)}</span><span style="font-size:12px;font-weight:600;color:var(--good)">${rankXI}º mejor de la liga</span></div>
-    <button class="glass card stack" style="gap:4px;text-align:left;cursor:pointer" id="saldoBtn"><span class="small" style="font-weight:500">Saldo</span><span class="num" style="font-size:28px;font-weight:700;${s==null?"color:var(--ink3)":""}">${s==null?"— M":M(s)}</span><span style="font-size:12px;font-weight:600;color:var(--teal)">${s==null?"Introducir saldo":"Cambiar"}</span></button>
+    <button class="glass card stack" style="gap:4px;text-align:left;cursor:pointer" id="saldoBtn"><span class="small" style="font-weight:500">Saldo</span><span class="num" style="font-size:28px;font-weight:700;${s==null?"color:var(--ink3)":s<0?"color:var(--bad)":""}">${s==null?"— M":(s<0?"−"+M(-s):M(s))}</span><span style="font-size:12px;font-weight:600;color:var(--teal)">${s==null?"Introducir saldo":s<0?"En deuda · cambiar":"Cambiar"}</span></button>
   </div>
   <div class="glass card stack" style="gap:10px"><div class="row" style="gap:8px"><div style="width:28px;height:28px;border-radius:14px;background:var(--good-bg);display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6EE7B7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M4 15l4-4 4 3 7-8"/></svg></div><span style="font-size:15px;font-weight:700">Parte del Director</span></div>
   <p style="margin:0;font-size:14px;line-height:1.5;color:var(--ink5)">${esc(memoText())}</p></div>
-  <div class="between" style="padding-top:4px"><span class="h2">Decisiones de hoy</span><span class="muted">${dec.length} propuestas</span></div>
-  ${s==null?`<div class="note" style="background:var(--amber-bg);color:var(--amber)">Introduce tu saldo para ver solo lo que puedes pagar.</div>`:""}
+  <div class="between" style="padding-top:4px"><span class="h2">Decisiones de hoy</span><span class="muted">${dec.length} ${dec.length===1?"propuesta":"propuestas"}</span></div>
+  ${s==null?`<div class="note" style="background:var(--amber-bg);color:var(--amber)">Introduce tu saldo para ver solo lo que puedes pagar.</div>`:s<0?`<div class="note" style="background:var(--bad-bg);color:var(--bad)">Estás en deuda (−${M(-s)}). Antes de fichar, vende para volver a positivo.</div>`:""}
   <div class="stack" style="gap:10px">${dec.map(d => `
     <button class="glass dec" data-player="${esc(d.id||"")}">
       <div class="body"><div class="row" style="gap:6px"><span class="tag t-${d.tipo}">${d.tipo}</span>${d.when?`<span class="small">cierra ${esc(dt(d.when))}</span>`:""}</div>
       <span class="title">${esc(d.title)}</span><span class="muted">${esc(d.sub)}</span></div>
       ${d.kpi?`<div class="kpi"><b class="c-${d.tipo}">${esc(d.kpi)}</b><span class="small">${esc(d.kpiSub)}</span></div>`:""}
     </button>`).join("") || `<p class="muted">Nada urgente hoy.</p>`}</div>
+  ${movimientos()}
   <p class="small center">Datos de ${esc(new Date(B.captura).toLocaleString("es-ES",{weekday:"short",hour:"2-digit",minute:"2-digit"}))} · confirma precios en Futmondo antes de pagar</p>
+  </div>`;
+}
+
+function movimientos(){
+  const tp = B.traspasos_pendientes || [], mv = B.mis_jugadores_en_venta || [];
+  if (!tp.length && !mv.length) return "";
+  const hora = iso => new Date(iso + (iso.length <= 16 ? ":00Z" : "")).toLocaleString("es-ES",{weekday:"short",hour:"2-digit",minute:"2-digit"});
+  return `<div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Movimientos en curso</span></div>
+  ${tp.map(t => `<div class="list-row" style="cursor:default"><span class="tag ${t.mio?"t-ALERTA":"t-CLAUSULAZO"}">${t.mio?"SE VA":"CLÁUSULA"}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(t.jugador)}<br><span class="small">${t.mio?"Sale de tu equipo":`Sale de ${esc(short(t.equipo))}; si la pagaste tú, llega a tu equipo`} · ${esc(hora(t.libre_desde))}</span></span><span class="num" style="font-weight:700">${M(t.clausula_M)}</span></div>`).join("")}
+  ${mv.map(p => `<div class="list-row" style="cursor:default"><span class="tag t-VENDER">EN VENTA</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}<br><span class="small">Valor ${M(p.value_M)} · ${p.pujas ? p.pujas + " puja(s)" : "sin pujas"} · cierra ${esc(dt(p.expira))}</span></span><span class="num" style="font-weight:700">${M(p.precio_salida_M)}</span></div>`).join("")}
   </div>`;
 }
 
@@ -296,16 +316,18 @@ function viewMercado(){
       const off = s!=null && p.puja.objetivo_M > s;
       return `<button class="glass pcard" data-player="${esc(p.id)}" style="${off?"opacity:.55":""}">
       <div class="row"><div class="avatar">${ROLE[p.role]}</div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span class="pname">${esc(p.name)}</span><span class="small">${esc(p.club)} · ${esc(p.vendedor==="Mercado (máquina)"?"Máquina":short(p.vendedor))}${p.absent_streak>=2?` · ${p.absent_streak} jornadas sin jugar`:""}</span></div><span class="tag t-${p.veredicto}">${p.veredicto}</span></div>
-      <div class="grid4"><div class="stat"><b class="c-${p.veredicto}">${sg(p.mejora_xi)}</b><span>pts/jornada</span></div><div class="stat"><b>${M(p.puja.objetivo_M)}</b><span>${off?"fuera de saldo":"puja objetivo"}</span></div><div class="stat"><b style="font-size:13px;font-family:Inter">${esc(dt(p.expira))}</b><span>cierra</span></div>${spark(p.fitness)}</div></button>`;}).join("");
+      <div class="grid4"><div class="stat"><b class="c-${p.veredicto}">${sg(p.mejora_xi)}</b><span>pts/jornada</span></div><div class="stat"><b>${M(p.puja.objetivo_M)}</b><span>${off?"fuera de saldo":"puja objetivo"}</span></div><div class="stat"><b style="font-size:13px;font-family:Inter">${esc(dt(p.expira))}</b><span>cierra</span></div>${spark(p.fitness)}</div>
+      <div class="small" style="margin-top:-4px">Valor ${M(p.value_M)}${trendTxt(p) ? " · " + trendTxt(p) : ""}</div></button>`;}).join("");
   } else {
     const rows = B.clausulazos.filter(pass).map((c,i)=>[c,i]).sort((x,y) => ((s!=null && x[0].clausula_max_M > s) - (s!=null && y[0].clausula_max_M > s)) || (x[1]-y[1])).map(x=>x[0]);
     list = `<div class="note" style="background:var(--blue-bg);color:#BFDBFE">Jugadores de rivales cuya cláusula mejora tu once. Cláusulas leídas de la ficha de cada jugador.</div>` + rows.map(c => {
       const off = s!=null && c.clausula_max_M > s;
       return `<button class="glass pcard" data-player="${esc(c.id)}" style="${off?"opacity:.55":""}">
       <div class="row"><div class="avatar">${ROLE[c.role]}</div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span class="pname">${esc(c.name)}</span><span class="small">${esc(c.club)} · de ${esc(short(c.equipo_rival))}</span></div>${c.rival_directo?`<span class="tag t-VIGILAR">RIVAL DIRECTO</span>`:""}</div>
-      <div class="grid3"><div class="stat"><b class="c-CLAUSULAZO">${sg(c.mejora_xi)}</b><span>pts/jornada</span></div><div class="stat"><b>${M(c.clausula_max_M)}</b><span>${off?"fuera de saldo":c.clausula_exacta?"cláusula":"cláusula estimada"}</span></div><div class="stat"><b>${nf(c.avg5)}</b><span>media últ. 5</span></div></div></button>`;}).join("");
+      <div class="grid3"><div class="stat"><b class="c-CLAUSULAZO">${sg(c.mejora_xi)}</b><span>pts/jornada</span></div><div class="stat"><b>${M(c.clausula_max_M)}</b><span>${off?"fuera de saldo":c.clausula_exacta?"cláusula":"cláusula estimada"}</span></div><div class="stat"><b>${nf(c.avg5)}</b><span>media últ. 5</span></div></div>
+      <div class="small" style="margin-top:-4px">Valor ${M(c.value_M)}${trendTxt(c) ? " · " + trendTxt(c) : ""}</div></button>`;}).join("");
   }
-  return `<div class="stack">${header("Mercado", "", `<span class="muted">Saldo: ${s==null?"— M":M(s)}</span>`)}${tabs}<div class="chips">${chips}</div><div class="stack" style="gap:10px">${list || `<p class="muted">Nada con este filtro.</p>`}</div></div>`;
+  return `<div class="stack">${header("Mercado", "", `<span class="muted">Saldo: ${s==null?"— M":(s<0?"−"+M(-s):M(s))}</span>`)}${tabs}<div class="chips">${chips}</div><div class="stack" style="gap:10px">${list || `<p class="muted">Nada con este filtro.</p>`}</div></div>`;
 }
 
 function viewEquipo(){
@@ -402,7 +424,7 @@ function openPlayer(id){
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px;align-items:end;height:120px" role="img" aria-label="Puntos por jornada: ${rounds.map(r=>"J"+r[0]+" "+nf(r[1])).join(", ")}">${rounds.map(r => `<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;height:120px"><span style="font-size:10px;color:var(--ink4);font-weight:600">${nf(r[1],r[1]%1?1:0)}</span><div style="width:100%;border-radius:4px 4px 0 0;height:${Math.max(3,Math.round(Math.max(0,r[1])/mx*92))}px;background:${!r[1]?"rgba(255,255,255,0.14)":r[2]?"var(--teal)":"rgba(94,234,212,0.35)"}"></div></div>`).join("")}</div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px">${rounds.map(r=>`<span style="font-size:10px;color:var(--ink3);text-align:center">J${r[0]}</span>`).join("")}</div></div>`:""}
     <div class="grid2"><div class="glass card stat"><span>Media / últ. 5</span><b>${nf(p.avg,2)} / ${nf(p.avg5,2)}</b></div><div class="glass card stat"><span>Proyección</span><b>${nf(p.proj)} pts</b></div>
-    <div class="glass card stat"><span>Valor</span><b>${M(p.value_M)}</b></div><div class="glass card stat"><span>Partidos</span><b>${p.matches} de ${B.situacion.jornada_aprox}</b></div></div>
+    <div class="glass card stat"><span>Valor</span><b>${M(p.value_M)}</b>${trendTxt(p)?`<span style="display:block;margin-top:2px">${trendTxt(p)}</span>`:""}</div><div class="glass card stat"><span>Partidos</span><b>${p.matches} de ${B.situacion.jornada_aprox}</b></div></div>
     <a class="btn primary" href="https://www.futmondo.com/" target="_blank" rel="noopener">Abrir Futmondo</a>
     <span class="small center">Las pujas y cláusulas las haces tú en Futmondo</span></div>`;
   $("#sheetWrap").classList.add("open");
@@ -412,10 +434,20 @@ function closeSheet(){ $("#sheetWrap").classList.remove("open"); }
 function openSaldo(){
   const s = saldo();
   $("#sheet").innerHTML = `<div class="grab"></div><div class="stack"><span class="h2">Tu saldo</span><span class="muted">Futmondo no lo da por la API. Se guarda solo en este móvil y sirve para filtrar lo que puedes pagar.</span>
-  <label class="small" for="saldoIn">Saldo en millones</label><input class="field" id="saldoIn" inputmode="decimal" placeholder="4,48" value="${s==null?"":nf(s,2)}">
+  <div class="seg" role="group" aria-label="Signo del saldo"><button id="sgPos" class="${s==null||s>=0?"on":""}">Tengo dinero</button><button id="sgNeg" class="${s!=null&&s<0?"on":""}">Estoy en deuda</button></div>
+  <label class="small" for="saldoIn">Cantidad en millones</label><input class="field" id="saldoIn" inputmode="decimal" placeholder="1,18" value="${s==null?"":nf(Math.abs(s),2)}">
   <button class="btn primary" id="saldoOk">Guardar</button>${s!=null?`<button class="btn" id="saldoDel">Quitar saldo</button>`:""}</div>`;
   $("#sheetWrap").classList.add("open");
-  $("#saldoOk").onclick = () => { const v = parseFloat($("#saldoIn").value.replace(/\./g,"").replace(",",".")); if (!isNaN(v)) store.set(LS.saldo, String(v)); closeSheet(); render(); };
+  let neg = s != null && s < 0;
+  const paint = () => { $("#sgPos").classList.toggle("on", !neg); $("#sgNeg").classList.toggle("on", neg); };
+  $("#sgPos").onclick = () => { neg = false; paint(); };
+  $("#sgNeg").onclick = () => { neg = true; paint(); };
+  $("#saldoOk").onclick = () => {
+    const raw = $("#saldoIn").value.trim();
+    const v = parseFloat(raw.replace(/\./g,"").replace(",",".").replace(/^[-−]/,""));
+    if (!isNaN(v)) store.set(LS.saldo, String((neg || /^[-−]/.test(raw)) ? -Math.abs(v) : Math.abs(v)));
+    closeSheet(); render();
+  };
   if ($("#saldoDel")) $("#saldoDel").onclick = () => { store.set(LS.saldo, null); closeSheet(); render(); };
 }
 
@@ -435,6 +467,24 @@ document.addEventListener("click", e => {
   if (t.dataset.filt) { STATE.filt = t.dataset.filt; render(); return; }
   if (t.dataset.player) openPlayer(t.dataset.player);
 });
+/* deslizar el dedo para cambiar de sección */
+const ORDER = ["hoy","mercado","equipo","rivales","liga"];
+let tx = null, ty = null, tScroll = false;
+document.addEventListener("touchstart", e => {
+  if ($("#sheetWrap").classList.contains("open") || !B) { tx = null; return; }
+  const t = e.touches[0]; tx = t.clientX; ty = t.clientY;
+  tScroll = !!e.target.closest(".chips");
+}, {passive:true});
+document.addEventListener("touchend", e => {
+  if (tx == null || tScroll) return;
+  const t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+  tx = null;
+  if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+  const i = ORDER.indexOf(STATE.tab), j = i + (dx < 0 ? 1 : -1);
+  if (j < 0 || j >= ORDER.length) return;
+  STATE.tab = ORDER[j]; store.set(LS.tab, STATE.tab); render(); window.scrollTo(0,0);
+  const r = $("#root"); r.animate([{transform:`translateX(${dx<0?40:-40}px)`,opacity:.3},{transform:"none",opacity:1}],{duration:180,easing:"ease-out"});
+}, {passive:true});
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 load();
 </script>
