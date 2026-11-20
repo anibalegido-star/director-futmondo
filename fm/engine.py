@@ -302,7 +302,7 @@ def build_briefing(con, snap, finanzas=None):
             p["proj"] = p["proj_next"] = 0.0
 
     mine = squads.get(my_id, [])
-    alineacion, parte = _lineup_and_report(con, lm, mine, my_id, snap["captured_at"])
+    alineacion, revision = _lineup_and_report(con, lm, mine, my_id, snap["captured_at"])
     current_round = max((p["matches"] for sq in squads.values() for p in sq if not p["fuera_liga"]), default=0)
     remaining = max(TOTAL_ROUNDS - current_round, 1)
 
@@ -599,7 +599,7 @@ def build_briefing(con, snap, finanzas=None):
     return {
         "generado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "liga": league,
-        "alineacion": alineacion, "parte_jornada": parte,
+        "alineacion": alineacion, "revision": revision,
         "modelo": {"activo": bool(lm), "ultima_jornada": lm.last_round if lm else None},
         "captura": snap["captured_at"],
         "mi_equipo": my_name,
@@ -651,23 +651,10 @@ def _lineup_and_report(con, lm, mine, my_id, captured_at):
     con.commit()
     alineacion = {"jornada": nxt, "formacion": form, "pts": pts, "once": once,
                   "banquillo": banquillo, "dudas": dudas}
-    # parte de la última jornada jugada, si la proyectamos
-    last = lm.last_round
-    row = con.execute("SELECT player_ids, proj_total FROM lineups WHERE round=? AND team_id=?",
-                      (last, my_id)).fetchone()
-    parte = None
-    if row:
-        ids = json.loads(row[0])
-        actual = {pid: (r.get("points") or 0) for pid, rs in lm.rounds.items() for r in rs
-                  if r["round"] == last}
-        got = round(sum(actual.get(i, 0) for i in ids), 1)
-        best_cand = [dict(p, proj_next=actual.get(p["id"], 0)) for p in mine]
-        best_pts, _, _ = best_lineup(best_cand, "proj_next")
-        projs = con.execute("SELECT player_id, proj FROM projections WHERE round=?", (last,)).fetchall()
-        errs = [abs(pr - actual[pid]) for pid, pr in projs if pid in actual]
-        parte = {"jornada": last, "proyectado": row[1], "real": got, "optimo": best_pts,
-                 "error_medio": round(sum(errs) / len(errs), 2) if errs else None}
-    return alineacion, parte
+    # revisión de las jornadas ya jugadas: mi once, el tuyo y el ideal
+    from .review import review_all
+    revision = review_all(con, my_id, lm.last_round)
+    return alineacion, revision
 
 
 def _public(p):
