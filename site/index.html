@@ -77,7 +77,7 @@ button{font:inherit;color:inherit}
 .spark{display:flex;gap:3px;align-items:flex-end;height:30px;justify-content:flex-end}
 .spark i{display:block;width:6px;border-radius:3px}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:rgba(6,20,22,0.70);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px);border-top:1px solid var(--glass-line);padding:8px 6px calc(10px + var(--safe-b))}
-nav.tabs .in{max-width:520px;margin:0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}
+nav.tabs .in{max-width:520px;margin:0 auto;display:grid;grid-template-columns:repeat(6,minmax(0,1fr))}
 nav.tabs button{background:none;border:0;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;font-weight:500;color:var(--ink2);cursor:pointer;min-height:52px;justify-content:center}
 nav.tabs button.on{color:var(--teal);font-weight:700}
 .pitch{position:relative;height:430px;border-radius:24px;padding:18px 6px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;
@@ -112,7 +112,8 @@ tr.me td{color:var(--teal);font-weight:700}
 <nav class="tabs hidden" id="tabs"><div class="in">
   <button data-tab="hoy"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Hoy</button>
   <button data-tab="mercado"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>Mercado</button>
-  <button data-tab="equipo"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3l4 2 4-2 5 3-2 5-2-1v11H7V10l-2 1-2-5z"/></svg>Mi equipo</button>
+  <button data-tab="equipo"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3l4 2 4-2 5 3-2 5-2-1v11H7V10l-2 1-2-5z"/></svg>Equipo</button>
+  <button data-tab="revision"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>Revisión</button>
   <button data-tab="rivales"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18.5 14.5c1.8.8 3 2.7 3 5.5"/></svg>Rivales</button>
   <button data-tab="liga"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/></svg>Liga</button>
 </div></nav>
@@ -299,7 +300,6 @@ function viewHoy(){
       ${d.kpi?`<div class="kpi"><b class="c-${d.tipo}">${esc(d.kpi)}</b><span class="small">${esc(d.kpiSub)}</span></div>`:""}
     </button>`).join("") || `<p class="muted">Nada urgente hoy.</p>`}</div>
   ${noticias()}
-  ${parteJornada()}
   ${movimientos()}
   <p class="small center">Datos de ${esc(new Date(B.captura).toLocaleString("es-ES",{weekday:"short",hour:"2-digit",minute:"2-digit"}))} · confirma precios en Futmondo antes de pagar</p>
   </div>`;
@@ -312,11 +312,38 @@ function noticias(){
   ${N.avisos.slice(0,10).map(a => `<a class="list-row" href="${esc(a.enlace)}" target="_blank" rel="noopener" style="align-items:flex-start"><span class="tag ${col[a.tipo]||"t-DATOS"}">${esc(a.etiqueta.toUpperCase())}</span><span style="flex:1;font-size:14px;color:var(--ink)"><b style="font-weight:600">${esc(a.jugador)}</b> · ${esc(a.titulo)}<br><span class="small">${esc(a.fuente)} · ${esc(a.motivo)}${a.fecha?" · "+esc(dt(a.fecha)):""}</span></span></a>`).join("")}
   <p class="small" style="margin:8px 0 10px">Buscado por palabras clave en titulares: puede haber avisos falsos. Ábrelo antes de decidir.</p></div>`;
 }
-function parteJornada(){
-  const P = B.parte_jornada; if (!P) return "";
-  return `<div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Parte de la jornada ${P.jornada}</span>
-  <div class="grid3"><div class="stat"><b>${nf(P.proyectado)}</b><span>proyectado</span></div><div class="stat"><b style="color:${P.real>=P.proyectado?"var(--good)":"var(--bad)"}">${nf(P.real)}</b><span>hiciste</span></div><div class="stat"><b>${nf(P.optimo)}</b><span>máximo posible</span></div></div>
-  <span class="small">${P.real>=P.optimo-5?"Casi el máximo posible con tu plantilla.":`Se quedaron ${nf(P.optimo-P.real)} pts en el banquillo.`}${P.error_medio!=null?` Error medio por jugador: ${nf(P.error_medio,2)} pts.`:""}</span></div>`;
+function viewRevision(){
+  const R = B.revision || {jornadas: []};
+  const head = header("Revisión", "Mi once, el tuyo y el ideal de cada jornada");
+  if (!R.jornadas.length) return `<div class="stack">${head}<div class="glass card stack" style="gap:8px">
+    <span style="font-size:15px;font-weight:700">Todavía no hay jornadas revisadas</span>
+    <span class="small">Antes de cada jornada guardo el once que te recomiendo. Cuando se juega, aquí verás cuántos puntos habría hecho mi once, cuántos hizo el tuyo y cuál era el ideal sabiendo los resultados. Si cambiaste a alguien, te digo si acertaste.</span>
+    <span class="small">La primera revisión será la de la jornada ${B.alineacion ? B.alineacion.jornada : "próxima"}: aparecerá como provisional mientras se juega.</span></div></div>`;
+  const J = R.jornadas.find(j => String(j.jornada) === String(STATE.rev)) || R.jornadas[0];
+  const row = (r, extra) => `<div class="between" style="padding:7px 0;border-bottom:1px solid var(--glass-line)"><span style="font-size:14px">${esc(r.name)}${r.st==="nc"?' <span class="small">· no convocado</span>':r.st==="b"?' <span class="small">· no jugó</span>':""}</span><span class="num" style="font-weight:700">${nf(r.real)}${extra||""}</span></div>`;
+  const id = J.ideal.real, col = v => v==null ? "" : `style="color:${v>=id-3?"var(--good)":v>=id-12?"var(--ink)":"var(--bad)"}"`;
+  const C = J.cambios, S = R.resumen;
+  const sel = R.jornadas.length > 1 ? `<div class="chips">${R.jornadas.map(j=>`<button class="chip ${j.jornada===J.jornada?"on":""}" data-rev="${j.jornada}">J${j.jornada}${j.provisional?" · en juego":""}</button>`).join("")}</div>` : "";
+  const top = `<div class="glass card stack" style="gap:8px"><div class="between"><span style="font-size:15px;font-weight:700">Jornada ${J.jornada}</span><span class="small">${J.provisional?"en juego · provisional":"cerrada"}</span></div>
+    <div class="grid3"><div class="stat"><b ${col(J.director.real)}>${nf(J.director.real)}</b><span>mi once · esperaba ${nf(J.director.proyectado)}</span></div><div class="stat"><b ${col(J.tu.real)}>${J.tu.real==null?"–":nf(J.tu.real)}</b><span>tu once</span></div><div class="stat"><b>${nf(id)}</b><span>ideal (a posteriori)</span></div></div>
+    <span class="small">Mi once es el que te recomendaba justo antes de empezar la jornada.</span></div>`;
+  let cambios = "";
+  if (C && (C.metiste.length || C.quitaste.length)) {
+    cambios = `<div class="glass card stack" style="gap:4px"><div class="between"><span style="font-size:15px;font-weight:700">Tus cambios</span><b class="num" style="color:${C.balance>0?"var(--good)":C.balance<0?"var(--bad)":"var(--ink2)"}">${C.balance>0?"+":""}${nf(C.balance)} pts</b></div>
+    <span class="small">Metiste</span>${C.metiste.map(r=>row(r)).join("")}<span class="small" style="margin-top:8px">en lugar de</span>${C.quitaste.map(r=>row(r)).join("")}
+    <span class="small" style="margin-top:6px">${C.balance>0?"Tu criterio ganó a mi modelo esta vez: piensa por qué (noticias, rival, intuición) para que lo aprendamos.":C.balance<0?"Mi recomendación habría sumado más.":"Mismo resultado."}</span></div>`;
+  } else if (J.tu.deduccion === "exacta" || J.tu.deduccion === "equivalente") {
+    cambios = `<div class="glass card"><span class="small">Pusiste exactamente el once que te recomendé.</span></div>`;
+  } else if (J.tu.real != null) {
+    cambios = `<div class="glass card"><span class="small">Hiciste ${nf(J.tu.real)} pts, pero no he podido deducir qué once pusiste: ninguna alineación de tu plantilla suma exactamente eso, o varias lo hacen. Pasa si compras o vendes durante la jornada.</span></div>`;
+  }
+  const fallos = J.fallos.length ? `<div class="glass card stack" style="gap:4px"><span style="font-size:15px;font-weight:700">Dónde fallé</span>${J.fallos.map(r=>row(r,` <span class="small">/ esperaba ${nf(r.proj)}</span>`)).join("")}</div>` : "";
+  const banq = J.banquillo.length ? `<div class="glass card stack" style="gap:4px"><span style="font-size:15px;font-weight:700">Fuera de mi once y puntuaron</span>${J.banquillo.map(r=>row(r)).join("")}</div>` : "";
+  const ideal = `<div class="glass card stack" style="gap:4px"><div class="between"><span style="font-size:15px;font-weight:700">Once ideal</span><span class="small">${esc(J.ideal.formacion||"")} · ${nf(id)} pts</span></div>${J.ideal.once.map(r=>row(r)).join("")}<span class="small" style="margin-top:6px">Sabiendo ya los resultados. Sirve de techo, no de objetivo.</span></div>`;
+  const temporada = S ? `<div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Tú contra el Director · ${S.jornadas} jornada${S.jornadas>1?"s":""}</span>
+    <div class="grid3"><div class="stat"><b>${nf(S.director_total)}</b><span>con mi once</span></div><div class="stat"><b>${nf(S.tu_total)}</b><span>con el tuyo</span></div><div class="stat"><b>${nf(S.ideal_total)}</b><span>ideal</span></div></div>
+    <span class="small">Cambiaste algo en ${S.jornadas_con_cambios} jornada${S.jornadas_con_cambios===1?"":"s"}: ${S.cambios_acertados} acierto${S.cambios_acertados===1?"":"s"}, ${S.cambios_fallados} fallo${S.cambios_fallados===1?"":"s"}.</span></div>` : "";
+  return `<div class="stack">${head}${temporada}${sel}${top}${cambios}${fallos}${banq}${ideal}</div>`;
 }
 function movimientos(){
   const tp = B.traspasos_pendientes || [], mv = B.mis_jugadores_en_venta || [];
@@ -549,23 +576,24 @@ function openSaldo(){
 }
 
 /* ---------------- render ---------------- */
-const VIEWS = { hoy: viewHoy, mercado: viewMercado, equipo: viewEquipo, rivales: viewRivales, liga: viewLiga };
+const VIEWS = { hoy: viewHoy, mercado: viewMercado, equipo: viewEquipo, revision: viewRevision, rivales: viewRivales, liga: viewLiga };
 function render(){
   $("#root").innerHTML = (VIEWS[STATE.tab] || viewHoy)();
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === STATE.tab));
 }
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-tab],[data-player],[data-mkt],[data-filt],#saldoBtn,#sheetBg");
+  const t = e.target.closest("[data-tab],[data-player],[data-mkt],[data-filt],[data-rev],#saldoBtn,#sheetBg");
   if (!t) return;
   if (t.id === "sheetBg") return closeSheet();
   if (t.id === "saldoBtn") return openSaldo();
   if (t.dataset.tab) { STATE.tab = t.dataset.tab; store.set(LS.tab, STATE.tab); render(); window.scrollTo(0,0); return; }
   if (t.dataset.mkt) { STATE.mkt = t.dataset.mkt; render(); return; }
   if (t.dataset.filt) { STATE.filt = t.dataset.filt; render(); return; }
+  if (t.dataset.rev) { STATE.rev = t.dataset.rev; render(); return; }
   if (t.dataset.player) openPlayer(t.dataset.player);
 });
 /* deslizar el dedo para cambiar de sección */
-const ORDER = ["hoy","mercado","equipo","rivales","liga"];
+const ORDER = ["hoy","mercado","equipo","revision","rivales","liga"];
 let tx = null, ty = null, tScroll = false;
 document.addEventListener("touchstart", e => {
   if ($("#sheetWrap").classList.contains("open") || !B) { tx = null; return; }
