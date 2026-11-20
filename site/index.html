@@ -285,7 +285,7 @@ function viewHoy(){
     </div>` : ""}
   </div>
   <div class="grid2">
-    <div class="glass card stack" style="gap:4px"><span class="small" style="font-weight:500">Once proyectado</span><span class="num" style="font-size:28px;font-weight:700">${nf(S.mi_xi_proxima)}</span><span style="font-size:12px;font-weight:600;color:var(--good)">${rankXI}º mejor de la liga</span></div>
+    <div class="glass card stack" style="gap:4px"><span class="small" style="font-weight:500">${B.alineacion ? "Tu once · jornada " + B.alineacion.jornada : "Once proyectado"}</span><span class="num" style="font-size:28px;font-weight:700">${nf(B.alineacion ? B.alineacion.pts : S.mi_xi_proxima)}</span><span style="font-size:12px;font-weight:600;color:var(--good)">${rankXI}º mejor de la liga</span></div>
     <button class="glass card stack" style="gap:4px;text-align:left;cursor:pointer" id="saldoBtn"><span class="small" style="font-weight:500">Saldo</span><span class="num" style="font-size:28px;font-weight:700;${s==null?"color:var(--ink3)":s<0?"color:var(--bad)":""}">${s==null?"— M":(s<0?"−"+M(-s):M(s))}</span><span style="font-size:12px;font-weight:600;color:var(--teal)">${s==null?"Introducir saldo":s<0?"En deuda · cambiar":"Cambiar"}</span></button>
   </div>
   <div class="glass card stack" style="gap:10px"><div class="row" style="gap:8px"><div style="width:28px;height:28px;border-radius:14px;background:var(--good-bg);display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6EE7B7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M4 15l4-4 4 3 7-8"/></svg></div><span style="font-size:15px;font-weight:700">Parte del Director</span></div>
@@ -298,11 +298,26 @@ function viewHoy(){
       <span class="title">${esc(d.title)}</span><span class="muted">${esc(d.sub)}</span></div>
       ${d.kpi?`<div class="kpi"><b class="c-${d.tipo}">${esc(d.kpi)}</b><span class="small">${esc(d.kpiSub)}</span></div>`:""}
     </button>`).join("") || `<p class="muted">Nada urgente hoy.</p>`}</div>
+  ${noticias()}
+  ${parteJornada()}
   ${movimientos()}
   <p class="small center">Datos de ${esc(new Date(B.captura).toLocaleString("es-ES",{weekday:"short",hour:"2-digit",minute:"2-digit"}))} · confirma precios en Futmondo antes de pagar</p>
   </div>`;
 }
 
+function noticias(){
+  const N = B.noticias; if (!N || !N.avisos || !N.avisos.length) return "";
+  const col = {baja:"t-ALERTA", sancion:"t-ALERTA", duda:"t-VIGILAR", alta:"t-PUJAR", rotacion:"t-DATOS", mercado:"t-CLAUSULAZO"};
+  return `<div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Radar de noticias</span><span class="small">${N.avisos.length} avisos</span></div>
+  ${N.avisos.slice(0,10).map(a => `<a class="list-row" href="${esc(a.enlace)}" target="_blank" rel="noopener" style="align-items:flex-start"><span class="tag ${col[a.tipo]||"t-DATOS"}">${esc(a.etiqueta.toUpperCase())}</span><span style="flex:1;font-size:14px;color:var(--ink)"><b style="font-weight:600">${esc(a.jugador)}</b> · ${esc(a.titulo)}<br><span class="small">${esc(a.fuente)} · ${esc(a.motivo)}${a.fecha?" · "+esc(dt(a.fecha)):""}</span></span></a>`).join("")}
+  <p class="small" style="margin:8px 0 10px">Buscado por palabras clave en titulares: puede haber avisos falsos. Ábrelo antes de decidir.</p></div>`;
+}
+function parteJornada(){
+  const P = B.parte_jornada; if (!P) return "";
+  return `<div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Parte de la jornada ${P.jornada}</span>
+  <div class="grid3"><div class="stat"><b>${nf(P.proyectado)}</b><span>proyectado</span></div><div class="stat"><b style="color:${P.real>=P.proyectado?"var(--good)":"var(--bad)"}">${nf(P.real)}</b><span>hiciste</span></div><div class="stat"><b>${nf(P.optimo)}</b><span>máximo posible</span></div></div>
+  <span class="small">${P.real>=P.optimo-5?"Casi el máximo posible con tu plantilla.":`Se quedaron ${nf(P.optimo-P.real)} pts en el banquillo.`}${P.error_medio!=null?` Error medio por jugador: ${nf(P.error_medio,2)} pts.`:""}</span></div>`;
+}
 function movimientos(){
   const tp = B.traspasos_pendientes || [], mv = B.mis_jugadores_en_venta || [];
   if (!tp.length && !mv.length) return "";
@@ -345,20 +360,28 @@ function viewMercado(){
   return `<div class="stack">${header("Mercado", "", `<span class="muted">Saldo: ${s==null?"— M":(s<0?"−"+M(-s):M(s))}</span>`)}${tabs}<div class="chips">${chips}</div><div class="stack" style="gap:10px">${list || `<p class="muted">Nada con este filtro.</p>`}</div></div>`;
 }
 
+const ABBR = n => { const m = {"Real Madrid":"RMA","Barcelona":"BAR","Atlético de Madrid":"ATM","Athletic de Bilbao":"ATH","Real Sociedad":"RSO","Rayo Vallecano":"RAY","Celta de Vigo":"CEL","Deportivo de la Coruña":"DEP","Valencia":"VAL","Villarreal":"VIL","Sevilla":"SEV","Betis":"BET","Espanyol":"ESP","Getafe":"GET","Osasuna":"OSA","Alavés":"ALA","Elche":"ELC","Levante":"LEV","Málaga":"MAL","Racing":"RAC"}; return m[n] || (n||"").slice(0,3).toUpperCase(); };
 function viewEquipo(){
-  const xi = B.mi_once.filter(p => p.en_once), bench = B.mi_once.filter(p => !p.en_once);
+  const AL = B.alineacion;
+  const byId = Object.fromEntries(B.mi_once.map(p => [p.id, p]));
+  const xi = AL ? AL.once.map(o => Object.assign({}, byId[o.id] || {}, o, {role: o.juega_de, proj: o.proj_next, _orig: o.role})) : B.mi_once.filter(p => p.en_once);
+  const xiIds = new Set(xi.map(p => p.id));
+  const bench = B.mi_once.filter(p => !xiIds.has(p.id)).sort((a,b) => (b.proj_next||0) - (a.proj_next||0));
   const blind = Object.fromEntries(B.blindaje.map(b => [b.id, b.nivel]));
   const sell = new Set(B.ventas.filter(v => v.accion==="VENDER").map(v => v.id));
   const chip = v => v>=8 ? "background:var(--mint);color:var(--on-teal)" : v>=5 ? "background:rgba(255,255,255,0.14);color:var(--ink);border:1px solid rgba(255,255,255,0.25)" : "background:rgba(248,113,113,0.24);color:#FECACA";
   const flag = p => p.fuera_liga ? `<span class="flag" style="color:var(--bad);background:var(--bad-bg)">No puntúa</span>` : blind[p.id]==="ALTO" ? `<span class="flag" style="color:var(--bad);background:rgba(255,255,255,0.08)">Blindar</span>`
     : (p.played_last5!=null && p.played_last5<=2) ? `<span class="flag" style="color:var(--amber);background:var(--amber-bg)">Apenas juega</span>` : "";
-  const line = role => `<div class="pline">${xi.filter(p=>p.role===role).map(p => `<button class="pl" data-player="${esc(p.id)}"><div class="chipP" style="${chip(p.proj)}">${nf(p.proj)}</div><span class="n">${esc(short(p.name))}</span>${flag(p)}</button>`).join("")}</div>`;
+  const vs = p => p.partido && p.partido.rival ? `<span style="font-size:10px;color:var(--hero-ink)">${p.partido.casa?"vs":"en"} ${ABBR(p.partido.rival)}</span>` : "";
+  const moved = p => p._orig && p._orig !== p.role ? `<span class="flag" style="color:var(--blue);background:var(--blue-bg)">de ${ROLE[p.role]}</span>` : "";
+  const doubt = p => (p.status==="doubt" || (p.p_titular!=null && p.p_titular<0.6)) ? `<span class="flag" style="color:var(--amber);background:var(--amber-bg)">${p.status==="doubt"?"Duda":"Titular "+Math.round(p.p_titular*100)+"%"}</span>` : "";
+  const line = role => `<div class="pline">${xi.filter(p=>p.role===role).map(p => `<button class="pl" data-player="${esc(p.id)}"><div class="chipP" style="${chip(p.proj)}">${nf(p.proj)}</div><span class="n">${esc(short(p.name))}</span>${vs(p)}${moved(p) || doubt(p) || flag(p)}</button>`).join("")}</div>`;
   const cmp = ["portero","defensa","centrocampista","delantero"].map(r => { const v = B.posiciones[r]; const mx = 10;
     return `<div style="display:grid;grid-template-columns:74px minmax(0,1fr) 52px;gap:10px;align-items:center"><span style="font-size:13px;font-weight:600">${ROLE_ES[r]}</span>
     <div class="stack" style="gap:3px"><div style="height:8px;border-radius:4px;width:${Math.min(100,v.mi_media_xi/mx*100)}%;background:${v.diferencia<0?"#F87171":"var(--teal)"}"></div><div style="height:8px;border-radius:4px;width:${Math.min(100,v.media_liga_xi/mx*100)}%;background:rgba(255,255,255,0.2)"></div></div>
     <span class="num" style="text-align:right;font-weight:700;color:${v.diferencia<0?"var(--bad)":"var(--good)"}">${sg(v.diferencia)}</span></div>`; }).join("");
   return `<div class="stack">
-  ${header("Mi equipo", `Once ideal · ${esc(B.situacion.formacion)} · ${B.mi_once.length} jugadores`, `<div class="stack" style="gap:0;align-items:flex-end"><span class="num" style="font-size:26px;font-weight:700;color:var(--teal)">${nf(B.situacion.mi_xi_proxima)}</span><span class="small">pts/jornada</span></div>`)}
+  ${header("Mi equipo", AL ? `Alineación · jornada ${AL.jornada} · ${esc(AL.formacion)}` : `Once ideal · ${esc(B.situacion.formacion)} · ${B.mi_once.length} jugadores`, `<div class="stack" style="gap:0;align-items:flex-end"><span class="num" style="font-size:26px;font-weight:700;color:var(--teal)">${nf(AL ? AL.pts : B.situacion.mi_xi_proxima)}</span><span class="small">pts esperados</span></div>`)}
   <div class="pitch">
     <div class="ln" style="left:14px;right:14px;top:14px;bottom:14px;border-width:2px;border-radius:12px"></div>
     <div class="ln" style="left:14px;right:14px;top:50%;border-width:2px 0 0 0"></div>
@@ -366,10 +389,13 @@ function viewEquipo(){
     <div class="ln" style="left:50%;bottom:14px;width:150px;height:58px;margin-left:-75px;border-width:2px 2px 0 2px"></div>
     ${line("delantero")}${line("centrocampista")}${line("defensa")}${line("portero")}
   </div>
+  ${AL ? `<div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Por qué este once</span><span class="small">pts esperados</span></div>
+  ${xi.map(p => `<button class="list-row" data-player="${esc(p.id)}"><span style="width:34px;font-size:11px;font-weight:700;color:var(--ink2)">${ROLE[p.role]}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}<br><span class="small">${esc(p.explica||"")}</span></span><span class="num" style="width:40px;text-align:right;font-weight:700">${nf(p.proj)}</span></button>`).join("")}
+  <p class="small" style="margin:8px 0 10px">Alineación con más puntos esperados según titularidad, rival y lesiones. Los de "de DEL/MED/DEF" juegan en su posición secundaria. Confirma las dudas antes de que empiece la jornada.</p></div>` : ""}
   <div class="glass card stack" style="gap:12px"><span style="font-size:15px;font-weight:700">Tu once por líneas vs la liga</span>${cmp}
   <div class="row small" style="gap:14px"><span class="row" style="gap:4px"><i style="width:10px;height:6px;border-radius:3px;background:var(--teal)"></i>Tu media</span><span class="row" style="gap:4px"><i style="width:10px;height:6px;border-radius:3px;background:rgba(255,255,255,0.2)"></i>Media de la liga</span></div></div>
   <div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Suplentes</span><span class="small">${bench.length} jugadores</span></div>
-  ${bench.map(p => `<button class="list-row" data-player="${esc(p.id)}"><span style="width:34px;font-size:11px;font-weight:700;color:var(--ink2)">${ROLE[p.role]}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}${alertChip(p)}</span>${sell.has(p.id)?`<span class="tag t-VENDER">VENDER</span>`:""}<span class="num" style="width:34px;text-align:right;font-weight:700">${nf(p.proj)}</span></button>`).join("")}</div>
+  ${bench.map(p => `<button class="list-row" data-player="${esc(p.id)}"><span style="width:34px;font-size:11px;font-weight:700;color:var(--ink2)">${ROLE[p.role]}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}${alertChip(p)}</span>${sell.has(p.id)?`<span class="tag t-VENDER">VENDER</span>`:""}<span class="num" style="width:34px;text-align:right;font-weight:700">${nf(AL ? p.proj_next : p.proj)}</span></button>`).join("")}</div>
   <div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Riesgo de clausulazo</span></div>
   ${B.blindaje.filter(b=>b.nivel!=="BAJO").map(b => `<button class="list-row" data-player="${esc(b.id)}"><span class="tag t-${b.nivel}">${b.nivel}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(b.name)}<br><span class="small">${b.interesado?`le encaja a ${esc(short(b.interesado))}`:""}</span></span><span class="num" style="font-weight:700">${M(b.clausula_M)}</span></button>`).join("") || `<p class="muted">Sin riesgos destacados.</p>`}</div>
   </div>`;
@@ -452,6 +478,7 @@ function openPlayer(id){
     ${p.alertas && p.alertas.length ? `<div class="note" style="background:var(--bad-bg);color:var(--bad)"><b>${p.fuera_liga?"No juega en tu liga.":"Dato raro, revísalo en Futmondo."}</b> ${esc(p.alertas.join("; "))}.</div>` : ""}
     ${gain!=null?`<div class="hero" style="gap:6px;padding:18px 20px"><span style="font-size:13px;color:var(--hero-ink)">Impacto en tu once</span><div class="row" style="align-items:baseline;gap:8px"><span class="num" style="font-size:44px;font-weight:700;line-height:1;color:var(--mint)">${sg(gain)}</span><span>pts por jornada</span></div><span style="font-size:14px;color:var(--hero-ink)">${desplaza.length?`Entraría por ${esc(desplaza.join(", "))} · `:""}${starts} de las últimas 6 de titular</span></div>`:""}
     ${money}
+    ${proximos(p)}
     ${viabilidad(f.mkt || f.cl)}
     ${rounds.length?`<div class="glass card stack" style="gap:12px"><div class="between"><span style="font-size:15px;font-weight:700">Jornada a jornada</span><div class="row small" style="gap:12px"><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:var(--teal)"></i>Titular</span><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:rgba(94,234,212,0.35)"></i>Suplente</span></div></div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px;align-items:end;height:120px" role="img" aria-label="Puntos por jornada: ${rounds.map(r=>"J"+r[0]+" "+nf(r[1])).join(", ")}">${rounds.map(r => `<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;height:120px"><span style="font-size:10px;color:var(--ink4);font-weight:600">${nf(r[1],r[1]%1?1:0)}</span><div style="width:100%;border-radius:4px 4px 0 0;height:${Math.max(3,Math.round(Math.max(0,r[1])/mx*92))}px;background:${!r[1]?"rgba(255,255,255,0.14)":r[2]?"var(--teal)":"rgba(94,234,212,0.35)"}"></div></div>`).join("")}</div>
@@ -462,6 +489,15 @@ function openPlayer(id){
     <span class="small center">Las pujas y cláusulas las haces tú en Futmondo</span></div>`;
   $("#sheetWrap").classList.add("open");
   $("#closeSheet").onclick = closeSheet;
+}
+function proximos(p){
+  const ps = p.partidos || [];
+  const news = ((B.noticias||{}).avisos||[]).filter(a => a.jugador_id === p.id);
+  if (!ps.length && !news.length) return "";
+  return `<div class="glass card stack" style="gap:8px"><div class="between"><span style="font-size:15px;font-weight:700">Próximos partidos</span>${p.p_titular!=null?`<span class="small">titular ${Math.round(p.p_titular*100)}%</span>`:""}</div>
+  ${ps.length?`<div class="grid3">${ps.map(m => `<div style="border:1px solid var(--glass-line);border-radius:14px;padding:10px" class="stat"><span>J${m.round} · ${m.casa?"casa":"fuera"}</span><b style="font-size:15px">${esc(ABBR(m.rival))}</b><span style="color:${m.f_rival>=1.06?"var(--good)":m.f_rival<=0.94?"var(--bad)":"var(--ink2)"}">${m.f_rival>=1.06?"asequible":m.f_rival<=0.94?"difícil":"normal"} · ${nf(m.pts)} pts</span></div>`).join("")}</div>`:""}
+  ${p.explica?`<span class="small">${esc(p.explica)}</span>`:""}
+  ${news.map(a => `<a href="${esc(a.enlace)}" target="_blank" rel="noopener" class="small" style="display:block"><b style="color:var(--amber)">${esc(a.etiqueta)}:</b> ${esc(a.titulo)} (${esc(a.fuente)})</a>`).join("")}</div>`;
 }
 function viabilidad(t){
   if (!t || !t.operaciones) return "";
