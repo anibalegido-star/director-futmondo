@@ -156,3 +156,32 @@ def percentile(vals, q):
 
 __all__ = ["ROLES", "num", "parse_dt", "clause_info", "player_metrics", "best_xi",
            "xi_gain", "percentile", "combinations"]
+
+
+def best_lineup(players, key="proj_next"):
+    """Mejor once de la jornada aprovechando la posición secundaria (multiposición).
+
+    Prueba cada reparto de posición para los jugadores que tienen dos y se queda
+    con el que más puntos suma. Devuelve (puntos, formación, [(jugador, posición usada)]).
+    """
+    from itertools import product
+    flex = [p for p in players if p.get("role2") and p.get("role2") in ROLES and p["role2"] != p["role"]
+            and p.get(key, 0) > 0]
+    # solo merece la pena probar los mejores polivalentes (limita combinaciones)
+    flex = sorted(flex, key=lambda p: -p.get(key, 0))[:8]
+    best = (-1.0, None, [])
+    for choice in product(*[(p["role"], p["role2"]) for p in flex]):
+        override = {p["id"]: r for p, r in zip(flex, choice)}
+        squad = [dict(p, role=override.get(p["id"], p["role"]), _orig=p["role"]) for p in players]
+        by_role = {r: sorted((x for x in squad if x["role"] == r), key=lambda x: -x.get(key, 0)) for r in ROLES}
+        if not by_role["portero"]:
+            continue
+        for d, c, f in FORMATIONS:
+            need = {"defensa": d, "centrocampista": c, "delantero": f}
+            if any(len(by_role[r]) < n for r, n in need.items()):
+                continue
+            picks = [by_role["portero"][0]] + [x for r, n in need.items() for x in by_role[r][:n]]
+            total = sum(x.get(key, 0) for x in picks)
+            if total > best[0]:
+                best = (total, f"{d}-{c}-{f}", [(x, x["role"]) for x in picks])
+    return round(best[0], 2), best[1], best[2]

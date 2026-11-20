@@ -142,9 +142,11 @@ def _trend(hist, pid, now, days):
 
 def _rounds(con):
     out = defaultdict(list)
-    for pid, rnd, pts, home, starter in con.execute(
-            "SELECT player_id, round, points, home, starter FROM rounds"):
-        out[pid].append({"round": rnd, "points": pts, "home": home, "starter": starter})
+    for pid, rnd, pts, home, starter, st in con.execute(
+            "SELECT player_id, round, points, home, starter, st FROM rounds"):
+        if not st:   # capturas antiguas sin el código: lo deducimos
+            st = "st" if starter else ("bc" if pts else "nc")
+        out[pid].append({"round": rnd, "points": pts, "home": home, "starter": starter, "st": st})
     return out
 
 
@@ -237,8 +239,29 @@ def build_briefing(con, snap, finanzas=None):
     season_rounds = max((int(num((p.get("average") or {}).get("matches")))
                          for ro in snap["rosters"].values() for p in ro), default=0) or None
 
+    # ---- Fase 1: calendario + modelo partido a partido
+    from .fixtures import Calendar, load as load_calendar
+    from .model import LeagueModel
+    raw_all = [p for ro in snap["rosters"].values() for p in ro] + list(snap.get("market") or [])
+    cal_data = load_calendar(log=lambda *_: None)
+    cal = Calendar(cal_data, {p.get("team") for p in raw_all}) if cal_data else None
+    lm = None
+    if cal:
+        info = {p["id"]: {"role": p.get("role"), "club": p.get("team")} for p in raw_all
+                if p.get("team") in cal.to_of}
+        lm = LeagueModel(info, {pid: rounds.get(pid, []) for pid in info}, cal)
+
     def enrich(p, owner):
         m = player_metrics(p, summaries.get(p.get("id")), rounds.get(p.get("id")), season_rounds)
+        if lm and p.get("id") in lm.players:
+            pr = lm.project(p["id"], p.get("status") or "")
+            m["proj_antiguo"] = m["proj"]
+            m["proj"] = pr["avg3"]              # fichajes y fuerza: próximas 3 jornadas
+            m["proj_next"] = pr["next"]         # alineación: próxima jornada
+            m["partidos"] = pr["partidos"]
+            m["p_titular"] = pr["p_titular"]
+            m["forma_equipo"] = pr["forma_equipo"]
+            m["explica"] = lm.explain(pr, p.get("role"))
         m["owner"] = owner
         m["owner_name"] = teams_by_id.get(owner, "Mercado" if owner == "market" else owner)
         m["trend7"] = _trend(hist, m["id"], now, 7)
@@ -279,6 +302,7 @@ def build_briefing(con, snap, finanzas=None):
             p["proj"] = p["proj_next"] = 0.0
 
     mine = squads.get(my_id, [])
+    alineacion, parte = _lineup_and_report(con, lm, mine, my_id, snap["captured_at"])
     current_round = max((p["matches"] for sq in squads.values() for p in sq if not p["fuera_liga"]), default=0)
     remaining = max(TOTAL_ROUNDS - current_round, 1)
 
@@ -495,10 +519,12 @@ def build_briefing(con, snap, finanzas=None):
     # ---- ventas / descartes
     ventas = []
     xi_set = set(my_xi_ids)
+    once_jornada = {x["id"] for x in (alineacion or {}).get("once", [])}
+    xi_set |= once_jornada  # si juega la próxima jornada, no se recomienda vender por "no entrar"
     for p in mine:
         reasons = []
         if p["id"] not in xi_set:
-            reasons.append("no entra en tu once ideal")
+            reasons.append("no entra en tu once (ni esta jornada ni en las 3 próximas)")
         if p["trend7"] is not None and p["trend7"] < -5:
             reasons.append(f"su valor cae un {abs(p['trend7'])}% en 7 días")
         if p["form_delta"] <= -1.5:
@@ -573,6 +599,8 @@ def build_briefing(con, snap, finanzas=None):
     return {
         "generado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "liga": league,
+        "alineacion": alineacion, "parte_jornada": parte,
+        "modelo": {"activo": bool(lm), "ultima_jornada": lm.last_round if lm else None},
         "captura": snap["captured_at"],
         "mi_equipo": my_name,
         "finanzas": {"fondos_M": M(fondos) if fondos else None,
@@ -595,9 +623,57 @@ def build_briefing(con, snap, finanzas=None):
     }
 
 
+def _lineup_and_report(con, lm, mine, my_id, captured_at):
+    """Alineación de la próxima jornada + registro de proyecciones + parte de la anterior."""
+    from .metrics import best_lineup
+    if not lm or not mine:
+        return None, None
+    nxt = lm.last_round + 1
+    pts, form, picks = best_lineup(mine, "proj_next")
+    once_ids = [p["id"] for p, _ in picks]
+    once = []
+    for p, used in picks:
+        once.append({"id": p["id"], "name": p["name"], "role": p["_orig"], "juega_de": used,
+                     "proj_next": p.get("proj_next"), "p_titular": p.get("p_titular"),
+                     "explica": p.get("explica"), "status": p.get("status"),
+                     "partido": (p.get("partidos") or [None])[0]})
+    banquillo = [{"id": p["id"], "name": p["name"], "role": p["role"], "proj_next": p.get("proj_next"),
+                  "explica": p.get("explica")}
+                 for p in sorted(mine, key=lambda x: -(x.get("proj_next") or 0)) if p["id"] not in once_ids]
+    dudas = [o for o in once if o["status"] == "doubt" or (o["p_titular"] is not None and o["p_titular"] < 0.6)]
+    # registro (se sobrescribe hasta que empieza la jornada)
+    for p in mine:
+        if p.get("proj_next") is not None:
+            con.execute("INSERT OR REPLACE INTO projections VALUES (?,?,?,?)",
+                        (nxt, p["id"], p["proj_next"], captured_at))
+    con.execute("INSERT OR REPLACE INTO lineups VALUES (?,?,?,?,?)",
+                (nxt, my_id, json.dumps(once_ids), pts, captured_at))
+    con.commit()
+    alineacion = {"jornada": nxt, "formacion": form, "pts": pts, "once": once,
+                  "banquillo": banquillo, "dudas": dudas}
+    # parte de la última jornada jugada, si la proyectamos
+    last = lm.last_round
+    row = con.execute("SELECT player_ids, proj_total FROM lineups WHERE round=? AND team_id=?",
+                      (last, my_id)).fetchone()
+    parte = None
+    if row:
+        ids = json.loads(row[0])
+        actual = {pid: (r.get("points") or 0) for pid, rs in lm.rounds.items() for r in rs
+                  if r["round"] == last}
+        got = round(sum(actual.get(i, 0) for i in ids), 1)
+        best_cand = [dict(p, proj_next=actual.get(p["id"], 0)) for p in mine]
+        best_pts, _, _ = best_lineup(best_cand, "proj_next")
+        projs = con.execute("SELECT player_id, proj FROM projections WHERE round=?", (last,)).fetchall()
+        errs = [abs(pr - actual[pid]) for pid, pr in projs if pid in actual]
+        parte = {"jornada": last, "proyectado": row[1], "real": got, "optimo": best_pts,
+                 "error_medio": round(sum(errs) / len(errs), 2) if errs else None}
+    return alineacion, parte
+
+
 def _public(p):
     keys = ("id", "name", "role", "role2", "club", "status", "points", "avg", "avg5", "matches",
             "participation", "played_last5", "absent_streak", "alertas", "fuera_liga", "vendible_desde",
+            "partidos", "p_titular", "explica", "forma_equipo", "proj_antiguo",
             "form_delta", "regularity", "starter_rate", "proj", "proj_next", "trend7", "trend30",
             "owner_name")
     out = {k: p.get(k) for k in keys}

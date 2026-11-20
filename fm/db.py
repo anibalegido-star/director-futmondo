@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS rounds (
     player_id TEXT, round INTEGER, points REAL, home INTEGER, starter INTEGER, st TEXT,
     PRIMARY KEY (player_id, round)
 );
+CREATE TABLE IF NOT EXISTS projections (
+    round INTEGER, player_id TEXT, proj REAL, captured_at TEXT,
+    PRIMARY KEY (round, player_id)
+);
+CREATE TABLE IF NOT EXISTS lineups (
+    round INTEGER PRIMARY KEY, team_id TEXT, player_ids TEXT, proj_total REAL, captured_at TEXT
+);
 CREATE TABLE IF NOT EXISTS news (
     id TEXT PRIMARY KEY, created TEXT, player_id TEXT, player_name TEXT, club TEXT,
     buyer_id TEXT, buyer TEXT, seller_id TEXT, seller TEXT, price REAL, bids_json TEXT
