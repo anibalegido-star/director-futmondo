@@ -96,6 +96,13 @@ def main():
     if warning:
         briefing["errores_captura"] = [warning] + briefing["errores_captura"]
     briefing["origen"] = origin
+    if not a.offline:
+        try:
+            from fm.news import radar
+            print("Buscando noticias de tus jugadores y objetivos...")
+            briefing["noticias"] = radar(briefing)
+        except Exception as e:
+            print(f"   ⚠ Radar de noticias desactivado hoy ({e})")
     parte = memo(briefing)
     BRIEFING_JSON.write_text(json.dumps({"briefing": briefing, "parte": parte}, ensure_ascii=False, indent=1),
                              encoding="utf-8")
