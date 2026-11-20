@@ -87,6 +87,12 @@ def player_metrics(p, summary=None, rounds=None, season_rounds=None):
     next_factor = 0.0 if status in UNAVAILABLE else (0.6 if status == "doubt" else 1.0)
     reg = statistics.pstdev(fitness) if len(fitness) >= 2 else None
     starter_rate = None
+    techo = suelo = None
+    jugadas = sorted([r.get("points") or 0 for r in sorted(rounds or [], key=lambda r: r["round"])[-10:]
+                      if r.get("st") in ("st", "bc") or (r.get("points") or 0) != 0])
+    if len(jugadas) >= 4:
+        techo = round(jugadas[int(len(jugadas) * .75)], 1)   # una de cada cuatro jornadas da esto o más
+        suelo = round(jugadas[int(len(jugadas) * .25)], 1)
     if rounds:
         last = sorted(rounds, key=lambda r: r["round"])[-5:]
         starter_rate = sum(1 for r in last if r["starter"]) / len(last)
@@ -97,7 +103,7 @@ def player_metrics(p, summary=None, rounds=None, season_rounds=None):
         "avg": round(a, 2), "avg5": round(a5, 2), "matches": m, "fitness": fitness,
         "form_delta": round(a5 - a, 2) if m >= 3 else 0.0,
         "regularity": round(reg, 2) if reg is not None else None,
-        "starter_rate": starter_rate,
+        "starter_rate": starter_rate, "techo": techo, "suelo": suelo,
         "participation": round(participation, 2),
         "played_last5": played_last5,
         "absent_streak": absent_streak,

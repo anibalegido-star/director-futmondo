@@ -469,6 +469,44 @@ def build_briefing(con, snap, finanzas=None):
             item["score"] = round(item["mejora_por_M"] * bonus * 100, 2)
             clausulas.append(item)
     clausulas.sort(key=lambda x: -x["score"])
+
+    # ---- temporada: posición final esperada y cuánto la mueve cada operación
+    from .season import resumen as _season, efecto as _efecto
+    temporada = _season(teams, strength, current_round, remaining, my_id,
+                        premiados=int(num(cfg.get("usersToRank"), 0)) or 0)
+    if temporada:
+        for lst in (mercado, clausulas):
+            for it in [x for x in lst if (x.get("mejora_xi") or 0) > 0][:12]:
+                it["efecto_posicion"] = _efecto(temporada, my_id, it["mejora_xi"])
+        temporada.pop("_sim", None)
+        # perfil de riesgo según la tabla: quien va por detrás necesita techo, quien va arriba, regularidad
+        if temporada["posicion_actual"] <= 3:
+            temporada["perfil"] = {"modo": "conservar", "texto": "Vas arriba: prioriza jugadores regulares, que no fallen."}
+        elif temporada["prob_subir"] < 0.6 and temporada["posicion_actual"] > len(teams) / 2:
+            temporada["perfil"] = {"modo": "arriesgar", "texto": "Con tu ritmo actual es difícil subir: interesan jugadores con techo alto aunque fallen más, y apuestas baratas."}
+        else:
+            temporada["perfil"] = {"modo": "equilibrado", "texto": "Mezcla de regulares y algún jugador con techo alto."}
+        # plan por líneas: dónde tu once está más lejos de la media de la liga
+        lineas = sorted(({"linea": r, **v} for r, v in my_role.items() if r != "portero" or v["jugadores"]),
+                        key=lambda x: x["diferencia"])
+        temporada["lineas"] = lineas
+    # ---- caja: lo que entra cada jornada por puntos
+    eur_pt = num(cfg.get("moneyPerPoint")) or 0
+    caja = None
+    if eur_pt and temporada:
+        caja = {"euros_por_punto": eur_pt, "puntos_jornada": temporada["mi_ritmo"],
+                "ingreso_jornada_M": round(temporada["mi_ritmo"] * eur_pt / 1e6, 2),
+                "ingreso_resto_M": round(temporada["mi_ritmo"] * eur_pt * remaining / 1e6, 1)}
+    # ---- movimiento de dinero de cada rival en los últimos 30 días (compras y ventas vistas)
+    flujo = defaultdict(lambda: {"compras_M": 0.0, "ventas_M": 0.0, "n_compras": 0})
+    desde = (now - timedelta(days=30)).isoformat()
+    for bid_, sid_, price, created in con.execute("SELECT buyer_id, seller_id, price, created FROM news"):
+        if (created or "") < desde:
+            continue
+        if bid_:
+            flujo[bid_]["compras_M"] += num(price) / 1e6; flujo[bid_]["n_compras"] += 1
+        if sid_:
+            flujo[sid_]["ventas_M"] += num(price) / 1e6
     every_by_id = {p["id"]: p for sq in squads.values() for p in sq}
     for item in clausulas[:15]:
         src = every_by_id[item["id"]]
@@ -568,6 +606,7 @@ def build_briefing(con, snap, finanzas=None):
             "clausulazos_sufridos": t.get("clauses_out"), "fichajes_vistos": m.get("fichajes"),
             "sobreprecio_mediano": m.get("sobreprecio_mediano"),
             "perfil": _profile(t, m, dep), "sin_estrella": sin_estrella,
+            "flujo_30d": {k: round(v, 1) if isinstance(v, float) else v for k, v in flujo[t["id"]].items()},
         })
 
     # ---- traspasos en curso: la API marca la cláusula pagada (transferred) y el cambio
@@ -606,7 +645,7 @@ def build_briefing(con, snap, finanzas=None):
         "finanzas": {"fondos_M": M(fondos) if fondos else None,
                      "puja_maxima_M": M(max_puja) if max_puja else None,
                      "fuente": "finanzas.json" if fondos else "sin datos (rellena finanzas.json)"},
-        "situacion": situacion, "tabla": tabla, "posiciones": my_role, "posicion_debil": weakest,
+        "situacion": situacion, "temporada": temporada, "caja": caja, "tabla": tabla, "posiciones": my_role, "posicion_debil": weakest,
         "mi_once": [_public(p) | {"en_once": p["id"] in set(my_xi_next_ids)} for p in
                     sorted(mine, key=lambda x: (ROLES.index(x["role"]) if x["role"] in ROLES else 9, -x["proj"]))],
         "decisiones": decisiones, "mercado": mercado,
@@ -661,7 +700,7 @@ def _public(p):
     keys = ("id", "name", "role", "role2", "club", "status", "points", "avg", "avg5", "matches",
             "participation", "played_last5", "absent_streak", "alertas", "fuera_liga", "vendible_desde",
             "partidos", "p_titular", "explica", "forma_equipo", "proj_antiguo",
-            "form_delta", "regularity", "starter_rate", "proj", "proj_next", "trend7", "trend30",
+            "form_delta", "regularity", "starter_rate", "techo", "suelo", "proj", "proj_next", "trend7", "trend30",
             "owner_name")
     out = {k: p.get(k) for k in keys}
     out["value_M"] = M(p["value"])
