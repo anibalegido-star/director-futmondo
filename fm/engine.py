@@ -7,7 +7,7 @@ estrategia. Todo son recomendaciones: la decisión y la ejecución son tuyas.
 
 import json
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .metrics import (ROLES, best_xi, num, parse_dt, percentile, player_metrics, xi_gain)
@@ -25,6 +25,83 @@ def swap_info(squad, cand, key="proj"):
     out_ids = set(ids) - set(new_ids)
     names = [p["name"] for p in squad if p["id"] in out_ids]
     return round(new - base, 2), names
+
+
+def plan_operations(mine, cand, cost_M, min_players=15, max_sells=2, top=4):
+    """Formas de pagar un fichaje: vender 0, 1 o 2 jugadores tuyos.
+
+    Para cada opción: cuánto mejora el once DESPUÉS de vender y fichar, cuánto
+    dinero liberas (a valor de mercado, aproximado) y cuánto te falta o sobra
+    para pagarlo. La app elige según tu saldo.
+    """
+    from itertools import combinations
+    # aquí un hueco vale 0: no hay suplente gratis al vender a alguien tuyo
+    base, _, _ = best_xi(mine, "proj", repl=0.0)
+    # los que no puntúan en tu liga se venden siempre primero: es dinero sin coste
+    can_sell = lambda p: not p.get("vendible_desde")   # reglas de tu liga: días mínimos tras comprar
+    dead = [p for p in mine if p.get("fuera_liga") and can_sell(p)]
+    sellable = [p for p in mine if not p.get("fuera_liga") and can_sell(p)]
+    plans = []
+    for k in range(0, max_sells + 1):
+        if len(mine) - k - len(dead) + 1 < min_players:
+            break
+        for combo in combinations(sellable, k):
+            combo = tuple(dead) + combo
+            ids = {p["id"] for p in combo}
+            squad = [p for p in mine if p["id"] not in ids] + [cand]
+            new, _, _ = best_xi(squad, "proj", repl=0.0)
+            raised = round(sum(p["value"] for p in combo) / 1e6, 2)
+            plans.append({
+                "vende": [p["name"] for p in combo],
+                "ingresa_M": raised,
+                "necesitas_M": round(cost_M - raised, 2),   # saldo mínimo para hacerlo
+                "mejora_neta": round(new - base, 2),
+                "jugadores_tras": len(squad),
+            })
+    # quedarse con las mejores por cada nivel de dinero necesario
+    plans.sort(key=lambda x: (-x["mejora_neta"], x["necesitas_M"]))
+    out = []
+    for pl in plans:
+        if pl["mejora_neta"] <= 0:
+            continue
+        # descarta opciones dominadas: misma o peor mejora y necesitan más saldo
+        if any(o["mejora_neta"] >= pl["mejora_neta"] and o["necesitas_M"] <= pl["necesitas_M"] for o in out):
+            continue
+        out.append(pl)
+    best = max((o["mejora_neta"] for o in out), default=0)
+    for o in out:   # vender a un buen jugador para fichar a otro a veces casi no compensa: se marca
+        o["rentable"] = o["mejora_neta"] >= 0.4 * best
+    out.sort(key=lambda x: x["necesitas_M"])
+    return out[:top]
+
+
+def checklist(p, cost_M, kind, league):
+    """Comprobaciones antes de pagar. ok: True/False/None (no se sabe)."""
+    items = []
+    items.append({"txt": "Juega en tu competición", "ok": not p.get("alertas"),
+                  "nota": "; ".join(p.get("alertas") or []) or None})
+    st = p.get("starter_rate")
+    pl5 = p.get("played_last5")
+    playing = (st is not None and st >= 0.6) or (st is None and pl5 is not None and pl5 >= 4)
+    items.append({"txt": "Juega de titular últimamente", "ok": bool(playing),
+                  "nota": None if playing else "rota o no juega: su media engaña"})
+    healthy = p.get("status") not in ("injured", "injured2", "redcard", "doubt")
+    items.append({"txt": "Sin lesión ni sanción", "ok": healthy,
+                  "nota": None if healthy else f"estado: {p.get('status')}"})
+    v = p["value"] / 1e6 if p.get("value") else 0
+    ratio = cost_M / v if v else None
+    fair = ratio is not None and ratio <= 2
+    items.append({"txt": "Precio razonable para su valor", "ok": fair,
+                  "nota": None if fair else (f"pagas {ratio:.1f} veces su valor ({v:.2f}M)" if ratio else "sin valor de mercado")})
+    tr = p.get("trend7")
+    if tr is not None:
+        items.append({"txt": "Su valor no se desploma", "ok": tr > -8,
+                      "nota": None if tr > -8 else f"{tr}% en 7 días"})
+    days = league.get("playerMoveInDays")
+    if kind == "clausula" and days:
+        items.append({"txt": "Llega a tu equipo a tiempo", "ok": None,
+                      "nota": f"en tu liga los traspasos se hacen efectivos {days} día(s) después del pago"})
+    return items
 
 
 def band_of(v):
@@ -181,8 +258,28 @@ def build_briefing(con, snap, finanzas=None):
         p["mine"] = bool(seller and seller["id"] == my_id)
     my_listed = [p for p in market if p.get("mine")]
     market = [p for p in market if not p.get("mine")]
+    # ---- control de competición: descarta jugadores que no puntúan en esta liga
+    # (caso Carles Pérez: único jugador de su club, valor mínimo y jornadas de otro calendario)
+    everyone = [p for sq in squads.values() for p in sq] + market
+    club_count = Counter(p["club"] for p in everyone)
+    maxr = [max(r[0] for r in p["rounds"]) for p in everyone if p.get("rounds")]
+    league_round = Counter(maxr).most_common(1)[0][0] if maxr else None
+    for p in everyone:
+        alerts = []
+        if club_count[p["club"]] < 3:
+            alerts.append(f"único jugador del {p['club']} en la liga: probablemente no juega en esta competición")
+        if league_round and p.get("rounds") and max(r[0] for r in p["rounds"]) > league_round + 1:
+            alerts.append("sus jornadas no coinciden con las de tu liga")
+        if p["value"] <= 1_050_000 and p["avg"] >= 6 and p["avg5"] >= 6 and p["matches"] >= 5:
+            alerts.append("valor mínimo con medias altas: dato anómalo")
+        p["alertas"] = alerts
+        # dos indicios fuertes = fuera de la competición: no puntúa para nadie
+        p["fuera_liga"] = bool(len(alerts) >= 2 or (alerts and club_count[p["club"]] < 3))
+        if p["fuera_liga"]:
+            p["proj"] = p["proj_next"] = 0.0
+
     mine = squads.get(my_id, [])
-    current_round = max((p["matches"] for sq in squads.values() for p in sq), default=0)
+    current_round = max((p["matches"] for sq in squads.values() for p in sq if not p["fuera_liga"]), default=0)
     remaining = max(TOTAL_ROUNDS - current_round, 1)
 
     # ---- fuerza proyectada de cada equipo (once ideal)
@@ -243,10 +340,40 @@ def build_briefing(con, snap, finanzas=None):
     weakest = min(my_role, key=lambda r: my_role[r]["diferencia"]) if mine else None
 
     intel = bid_intel(con, teams_by_id)
+    cfg = snap.get("config") or {}
+    league = {"min_jugadores": int(num(cfg.get("numberOfPlayers"), 15)) or 15,
+              "max_jugadores": int(num(cfg.get("maxPlayersInRoster"), 25)) or 25,
+              "playerMoveInDays": cfg.get("playerMoveInDays"),
+              "euros_por_punto": num(cfg.get("moneyPerPoint")) or None,
+              "presupuesto_inicial": num(cfg.get("budget")) or None,
+              "dias_para_vender": int(num(cfg.get("playerRetention"), 0)) or None,
+              "duracion_pujas_dias": cfg.get("bidDuration"),
+              "dias_activar_clausula": cfg.get("enablingClause"),
+              "prima_ranking": num(cfg.get("moneyPerRanking")) or None,
+              "posiciones_premiadas": cfg.get("usersToRank"),
+              "ranking": cfg.get("rankingMode")}
+    # 2. no se puede vender a quien compraste hace menos de N días
+    hold = league["dias_para_vender"] or 0
+    bought = {}
+    for row in con.execute("SELECT player_id, created FROM news WHERE buyer_id=?", (my_id,)):
+        d = parse_dt(row[1])
+        if d and (row[0] not in bought or d > bought[row[0]]):
+            bought[row[0]] = d
+    for raw in snap["rosters"].get(my_id, []):
+        c = raw.get("clause") if isinstance(raw.get("clause"), dict) else {}
+        for k in ("transferDate", "date"):
+            d = parse_dt(c.get(k))
+            if d and (now - d).days < 7 and (raw["id"] not in bought or d > bought[raw["id"]]):
+                bought[raw["id"]] = d
+    for p in mine:
+        d = bought.get(p["id"])
+        free = d + timedelta(days=hold) if d and hold else None
+        p["vendible_desde"] = free.isoformat() if free and free > now else None
 
     def bid_plan(p):
         b = intel["tramos"][band_of(p["value"])]
-        floor = max(p["asking"], p["value"])
+        # en tu liga se puede pujar por debajo del valor: el mínimo es el precio de salida
+        floor = p["asking"] or p["value"]
         target = max(floor, p["value"] * (1 + b["sobre_valor_mediana"]))
         aggressive = max(target, p["value"] * (1 + b["sobre_valor_p75"]))
         return {"minimo_M": M(floor), "objetivo_M": M(target), "agresiva_M": M(aggressive),
@@ -266,6 +393,14 @@ def build_briefing(con, snap, finanzas=None):
         p_out["veredicto"] = _verdict_market(p_out, p)
         mercado.append(p_out)
     mercado.sort(key=lambda x: (-{"PUJAR": 2, "VIGILAR": 1, "PASAR": 0}[x["veredicto"]], -x["mejora_xi"]))
+    by_id = {p["id"]: p for p in market}
+    for item in mercado:
+        if item["veredicto"] == "PASAR" and item["mejora_xi"] < 1:
+            continue
+        src = by_id[item["id"]]
+        item["operaciones"] = plan_operations(mine, src, item["puja"]["objetivo_M"], league["min_jugadores"])
+        item["antes_de_pagar"] = checklist(src, item["puja"]["objetivo_M"], "puja", league)
+        item["calidad_precio"] = round(item["mejora_xi"] / max(item["puja"]["objetivo_M"], 0.5), 3)
 
     # ---- clausulazos sobre rivales
     clausulas = []
@@ -283,6 +418,8 @@ def build_briefing(con, snap, finanzas=None):
                 bloqueados.append({"jugador": p["name"], "equipo": p["owner_name"],
                                    "clausula_M": M(c["max"]), "libre_desde": c["locked_until"][:16],
                                    "id": p["id"], "role": p["role"], "club": p["club"]})
+                continue
+            if p.get("fuera_liga") or p.get("alertas"):
                 continue
             if p["matches"] < 3 or p["status"] in ("injured", "injured2") or p["absent_streak"] >= 3:
                 continue
@@ -308,6 +445,12 @@ def build_briefing(con, snap, finanzas=None):
             item["score"] = round(item["mejora_por_M"] * bonus * 100, 2)
             clausulas.append(item)
     clausulas.sort(key=lambda x: -x["score"])
+    every_by_id = {p["id"]: p for sq in squads.values() for p in sq}
+    for item in clausulas[:15]:
+        src = every_by_id[item["id"]]
+        item["operaciones"] = plan_operations(mine, src, item["clausula_max_M"], league["min_jugadores"])
+        item["antes_de_pagar"] = checklist(src, item["clausula_max_M"], "clausula", league)
+        item["calidad_precio"] = round(item["mejora_xi"] / max(item["clausula_max_M"], 0.5), 3)
 
     # ---- blindaje de mi plantilla
     hunters = {t["id"]: (t.get("clauses_in") or 0) for t in teams if t["id"] != my_id}
@@ -412,6 +555,14 @@ def build_briefing(con, snap, finanzas=None):
 
     # ---- decisiones priorizadas
     decisiones = _decisions(mercado, clausulas, blindaje, ventas, mine, my_xi_next_ids, fondos, situacion)
+    for p in mine:
+        if p.get("fuera_liga"):
+            decisiones.insert(0, {"tipo": "ALERTA", "prioridad": 98,
+                                  "titulo": f"{p['name']} no puntúa en tu liga",
+                                  "detalle": "Según los datos, " + "; ".join(p["alertas"]) + ". No cuenta para tu once: véndelo"
+                                             + (f" (tu liga no te deja hasta el {_local_day(p['vendible_desde'])})" if p.get("vendible_desde") else "")
+                                             + " o reclama a Futmondo.",
+                                  "jugador_id": p["id"]})
     for t in pendientes:
         if t.get("mio"):
             decisiones.insert(0, {"tipo": "ALERTA", "prioridad": 99,
@@ -421,6 +572,7 @@ def build_briefing(con, snap, finanzas=None):
 
     return {
         "generado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "liga": league,
         "captura": snap["captured_at"],
         "mi_equipo": my_name,
         "finanzas": {"fondos_M": M(fondos) if fondos else None,
@@ -445,7 +597,7 @@ def build_briefing(con, snap, finanzas=None):
 
 def _public(p):
     keys = ("id", "name", "role", "role2", "club", "status", "points", "avg", "avg5", "matches",
-            "participation", "played_last5", "absent_streak",
+            "participation", "played_last5", "absent_streak", "alertas", "fuera_liga", "vendible_desde",
             "form_delta", "regularity", "starter_rate", "proj", "proj_next", "trend7", "trend30",
             "owner_name")
     out = {k: p.get(k) for k in keys}
@@ -459,6 +611,8 @@ def _public(p):
 
 
 def _verdict_market(item, p):
+    if p.get("fuera_liga") or p.get("alertas"):
+        return "PASAR"
     if p["status"] in ("injured", "injured2") or p["matches"] < 2 or p["absent_streak"] >= 3:
         return "PASAR"
     if p["absent_streak"] >= 2 or p["status"] == "doubt":
@@ -526,6 +680,17 @@ def _decisions(mercado, clausulas, blindaje, ventas, mine, xi_next_ids, fondos, 
                     "detalle": "La API no da tu saldo; sin él no puedo filtrar qué pujas y cláusulas te puedes permitir."})
     out.sort(key=lambda d: -d["prioridad"])
     return out
+
+
+def _local_day(iso):
+    d = parse_dt(iso)
+    try:
+        from zoneinfo import ZoneInfo
+        d = d.astimezone(ZoneInfo("Europe/Madrid"))
+    except Exception:
+        d = d + timedelta(hours=1)
+    dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    return f"{dias[d.weekday()]} {d.day}/{d.month} a las {d:%H:%M}"
 
 
 def _status_es(s):
