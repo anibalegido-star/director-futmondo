@@ -192,16 +192,22 @@ function decisions(){
     B.decisiones.filter(d => d.tipo !== "DATOS").forEach(d => out.push(fromServer(d)));
     return out;
   }
-  B.mercado.filter(p => p.veredicto === "PUJAR" && p.puja.objetivo_M <= s).slice(0,3).forEach(p => out.push({
-    tipo:"PUJAR", prio: 60 + p.mejora_xi*10, id:p.id, title:`${p.name} · ${ROLE[p.role]} ${short(p.club)}`,
-    sub:`Puja objetivo ${M(p.puja.objetivo_M)}${p.desplaza&&p.desplaza.length?` · entra por ${p.desplaza.join(", ")}`:""}`,
-    kpi: sg(p.mejora_xi), kpiSub:"pts/jornada", when: p.expira }));
-  B.clausulazos.filter(c => c.mejora_xi >= 1 && c.clausula_max_M <= s).slice(0,3).forEach(c => out.push({
+  const viable = (p, cost) => {
+    if (cost <= s && allOk(p)) return { vende: [], mejora_neta: p.mejora_xi, direct: true };
+    const ops = (p.operaciones || []).filter(o => o.rentable && o.necesitas_M <= s).sort((a,b) => b.mejora_neta - a.mejora_neta);
+    return ops[0] && allOk(p) ? ops[0] : null;
+  };
+  B.mercado.filter(p => p.veredicto === "PUJAR").map(p => [p, viable(p, p.puja.objetivo_M)]).filter(x => x[1]).slice(0,3).forEach(([p,o]) => out.push({
+    tipo:"PUJAR", prio: 60 + o.mejora_neta*10, id:p.id, title:`${p.name} · ${ROLE[p.role]} ${short(p.club)}`,
+    sub:`Puja objetivo ${M(p.puja.objetivo_M)}${o.vende.length?` · vendiendo a ${o.vende.join(", ")}`:""}`,
+    kpi: sg(o.mejora_neta), kpiSub:"pts/jornada", when: p.expira }));
+  B.clausulazos.filter(c => c.mejora_xi >= 1).map(c => [c, viable(c, c.clausula_max_M)]).filter(x => x[1]).slice(0,3).forEach(([c,o]) => out.push({
     tipo:"CLAUSULAZO", prio: 50 + c.score/2, id:c.id, title:`${c.name} · de ${short(c.equipo_rival)}`,
-    sub:`Cláusula ${M(c.clausula_max_M)}${c.rival_directo?" · rival directo":""}`, kpi: sg(c.mejora_xi), kpiSub:"pts/jornada" }));
+    sub:`Cláusula ${M(c.clausula_max_M)}${o.vende.length?` · vendiendo a ${o.vende.join(", ")}`:""}${c.rival_directo?" · rival directo":""}`, kpi: sg(o.mejora_neta), kpiSub:"pts/jornada" }));
   B.decisiones.filter(d => !["PUJAR","CLAUSULAZO","DATOS"].includes(d.tipo)).forEach(d => out.push(fromServer(d)));
   return out.sort((a,b) => b.prio - a.prio);
 }
+function allOk(p){ return !(p.antes_de_pagar || []).some(c => c.ok === false && /competición|lesión/.test(c.txt)); }
 function fromServer(d){
   const p = findPlayer(d.jugador_id);
   let kpi = "", kpiSub = "";
@@ -230,7 +236,12 @@ function memoText(){
     ? `${short(o.equipo)} está a ${nf(o.gap)} pts y tu once proyecta ${nf(o.diferencia_xi)} pts/jornada más que el suyo: a este ritmo la alcanzas en unas ${Math.max(1, Math.ceil(o.gap / o.diferencia_xi))} jornadas. `
     : `${short(o.equipo)} está a ${nf(o.gap)} pts y su once rinde más que el tuyo: necesitas reforzarte. `;
   const w = B.posicion_debil; if (w) t += `Tu punto débil es ${ROLE_ES[w].toLowerCase()} (${nf(B.posiciones[w].mi_media_xi,2)} frente a ${nf(B.posiciones[w].media_liga_xi,2)} de media). `;
-  const d = decisions().slice(0,2).map(x => x.title.split(" · ")[0] && `${x.tipo === "BLINDAR" ? "blindar a" : x.tipo === "PUJAR" ? "pujar por" : x.tipo === "CLAUSULAZO" ? "pagar la cláusula de" : x.tipo === "VENDER" ? "vender a" : "revisar a"} ${x.title.replace(/^(Subir la cláusula de|Pujar por|Clausulazo a|Vender a)\s+/,"").split(" · ")[0].split(" (")[0]}`);
+  const who = x => x.title.replace(/^(Subir la cláusula de|Pujar por|Clausulazo a|Vender a)\s+/,"").split(" · ")[0].split(" (")[0];
+  const verb = {BLINDAR:"blindar a", PUJAR:"pujar por", CLAUSULAZO:"pagar la cláusula de", VENDER:"vender a", "ALINEACIÓN":"revisar a"};
+  const top = decisions().slice(0,2);
+  const alert = top.find(x => x.tipo === "ALERTA");
+  if (alert) t += `Atención: ${alert.title}. `;
+  const d = top.filter(x => x.tipo !== "ALERTA").map(x => `${verb[x.tipo] || "revisar a"} ${who(x)}`);
   if (d.length) t += `Prioridad: ${d.join(" y ")}.`;
   return t;
 }
@@ -244,6 +255,10 @@ function trendTxt(p, compact){
   }
   if (p.trend7 != null && !compact) parts.push(`<span style="color:${p.trend7>=0?"var(--good)":"var(--bad)"}">${sg(p.trend7)}% 7 días</span>`);
   return parts.join(" · ");
+}
+function alertChip(p){
+  if (!p || !p.alertas || !p.alertas.length) return "";
+  return `<span class="tag t-ALERTA" style="margin-left:6px">${p.fuera_liga ? "NO JUEGA EN TU LIGA" : "DATO RARO"}</span>`;
 }
 function spark(f){ if(!f||!f.length) return ""; return `<div class="spark" role="img" aria-label="Últimas jornadas: ${f.map(v=>nf(v)).join(", ")}">${f.map(v => `<i style="height:${Math.max(3,Math.min(30,Math.max(0,v)*2.2))}px;background:${v>=8?"var(--teal)":v>=4?"rgba(94,234,212,0.6)":"rgba(255,255,255,0.2)"}"></i>`).join("")}</div>`; }
 function header(title, sub, right=""){ return `<div class="between"><div class="stack" style="gap:2px"><span class="h1">${title}</span>${sub?`<span class="muted">${sub}</span>`:""}</div>${right}</div>`; }
@@ -315,7 +330,7 @@ function viewMercado(){
     list = rows.map(p => {
       const off = s!=null && p.puja.objetivo_M > s;
       return `<button class="glass pcard" data-player="${esc(p.id)}" style="${off?"opacity:.55":""}">
-      <div class="row"><div class="avatar">${ROLE[p.role]}</div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span class="pname">${esc(p.name)}</span><span class="small">${esc(p.club)} · ${esc(p.vendedor==="Mercado (máquina)"?"Máquina":short(p.vendedor))}${p.absent_streak>=2?` · ${p.absent_streak} jornadas sin jugar`:""}</span></div><span class="tag t-${p.veredicto}">${p.veredicto}</span></div>
+      <div class="row"><div class="avatar">${ROLE[p.role]}</div><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span class="pname">${esc(p.name)}${alertChip(p)}</span><span class="small">${esc(p.club)} · ${esc(p.vendedor==="Mercado (máquina)"?"Máquina":short(p.vendedor))}${p.absent_streak>=2?` · ${p.absent_streak} jornadas sin jugar`:""}</span></div><span class="tag t-${p.veredicto}">${p.veredicto}</span></div>
       <div class="grid4"><div class="stat"><b class="c-${p.veredicto}">${sg(p.mejora_xi)}</b><span>pts/jornada</span></div><div class="stat"><b>${M(p.puja.objetivo_M)}</b><span>${off?"fuera de saldo":"puja objetivo"}</span></div><div class="stat"><b style="font-size:13px;font-family:Inter">${esc(dt(p.expira))}</b><span>cierra</span></div>${spark(p.fitness)}</div>
       <div class="small" style="margin-top:-4px">Valor ${M(p.value_M)}${trendTxt(p) ? " · " + trendTxt(p) : ""}</div></button>`;}).join("");
   } else {
@@ -335,7 +350,7 @@ function viewEquipo(){
   const blind = Object.fromEntries(B.blindaje.map(b => [b.id, b.nivel]));
   const sell = new Set(B.ventas.filter(v => v.accion==="VENDER").map(v => v.id));
   const chip = v => v>=8 ? "background:var(--mint);color:var(--on-teal)" : v>=5 ? "background:rgba(255,255,255,0.14);color:var(--ink);border:1px solid rgba(255,255,255,0.25)" : "background:rgba(248,113,113,0.24);color:#FECACA";
-  const flag = p => blind[p.id]==="ALTO" ? `<span class="flag" style="color:var(--bad);background:rgba(255,255,255,0.08)">Blindar</span>`
+  const flag = p => p.fuera_liga ? `<span class="flag" style="color:var(--bad);background:var(--bad-bg)">No puntúa</span>` : blind[p.id]==="ALTO" ? `<span class="flag" style="color:var(--bad);background:rgba(255,255,255,0.08)">Blindar</span>`
     : (p.played_last5!=null && p.played_last5<=2) ? `<span class="flag" style="color:var(--amber);background:var(--amber-bg)">Apenas juega</span>` : "";
   const line = role => `<div class="pline">${xi.filter(p=>p.role===role).map(p => `<button class="pl" data-player="${esc(p.id)}"><div class="chipP" style="${chip(p.proj)}">${nf(p.proj)}</div><span class="n">${esc(short(p.name))}</span>${flag(p)}</button>`).join("")}</div>`;
   const cmp = ["portero","defensa","centrocampista","delantero"].map(r => { const v = B.posiciones[r]; const mx = 10;
@@ -354,7 +369,7 @@ function viewEquipo(){
   <div class="glass card stack" style="gap:12px"><span style="font-size:15px;font-weight:700">Tu once por líneas vs la liga</span>${cmp}
   <div class="row small" style="gap:14px"><span class="row" style="gap:4px"><i style="width:10px;height:6px;border-radius:3px;background:var(--teal)"></i>Tu media</span><span class="row" style="gap:4px"><i style="width:10px;height:6px;border-radius:3px;background:rgba(255,255,255,0.2)"></i>Media de la liga</span></div></div>
   <div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Suplentes</span><span class="small">${bench.length} jugadores</span></div>
-  ${bench.map(p => `<button class="list-row" data-player="${esc(p.id)}"><span style="width:34px;font-size:11px;font-weight:700;color:var(--ink2)">${ROLE[p.role]}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}</span>${sell.has(p.id)?`<span class="tag t-VENDER">VENDER</span>`:""}<span class="num" style="width:34px;text-align:right;font-weight:700">${nf(p.proj)}</span></button>`).join("")}</div>
+  ${bench.map(p => `<button class="list-row" data-player="${esc(p.id)}"><span style="width:34px;font-size:11px;font-weight:700;color:var(--ink2)">${ROLE[p.role]}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(p.name)}${alertChip(p)}</span>${sell.has(p.id)?`<span class="tag t-VENDER">VENDER</span>`:""}<span class="num" style="width:34px;text-align:right;font-weight:700">${nf(p.proj)}</span></button>`).join("")}</div>
   <div class="glass" style="padding:6px 18px"><div class="between" style="padding:12px 0 6px"><span style="font-size:15px;font-weight:700">Riesgo de clausulazo</span></div>
   ${B.blindaje.filter(b=>b.nivel!=="BAJO").map(b => `<button class="list-row" data-player="${esc(b.id)}"><span class="tag t-${b.nivel}">${b.nivel}</span><span style="flex:1;font-size:14px;font-weight:500">${esc(b.name)}<br><span class="small">${b.interesado?`le encaja a ${esc(short(b.interesado))}`:""}</span></span><span class="num" style="font-weight:700">${M(b.clausula_M)}</span></button>`).join("") || `<p class="muted">Sin riesgos destacados.</p>`}</div>
   </div>`;
@@ -383,9 +398,25 @@ function viewRivales(){
   </div>`;
 }
 
+function reglas(){
+  const L = B.liga || {}; const me = B.tabla.find(t=>t.es_mio);
+  const R = [
+    ["Cada punto te paga", L.euros_por_punto ? Number(L.euros_por_punto).toLocaleString("es-ES") + " €" : "–", `Un once de 75 pts te da unos ${M(75*(L.euros_por_punto||0)/1e6)} por jornada.`],
+    ["Pujas máximas", "Saldo + 50% de tu equipo", me ? `Hoy, unos ${M((saldo()||0) + me.valor_M*0.5)}. Puedes pujar más de lo que tienes y quedar en deuda: úsalo con cabeza.` : ""],
+    ["Puja mínima", "Precio de salida", "En tu liga se puede pujar por debajo del valor del jugador."],
+    ["Las pujas duran", (L.duracion_pujas_dias||2) + " días", "Un mercado nuevo al día."],
+    ["Vender tras comprar", (L.dias_para_vender||3) + " días", "No puedes vender a un fichaje hasta pasados esos días. Piénsalo antes de comprar."],
+    ["Cláusulas", `Activas ${L.dias_activar_clausula||1} día después de fichar`, `Al pagar una cláusula, el jugador llega ${L.playerMoveInDays||1} día después.`],
+    ["Premios de ranking", L.prima_ranking ? M(L.prima_ranking/1e6) : "–", L.ranking==="flop" ? `Premios para los ${L.posiciones_premiadas||5} últimos del ranking: un empujón para quien va abajo. Mira en Futmondo cómo se reparten.` : ""],
+    ["Plantilla", `${L.min_jugadores||15}–${L.max_jugadores||25} jugadores`, "Sin límite de jugadores del mismo equipo. Los fondos de los rivales no se ven."]
+  ];
+  return `<div class="glass card stack" style="gap:4px"><span style="font-size:15px;font-weight:700">Reglas de tu liga</span>
+  ${R.map(r => `<div class="list-row" style="cursor:default;align-items:flex-start"><div class="stack" style="gap:2px;flex:1"><span style="font-size:14px;font-weight:600">${esc(r[0])}: <span style="color:var(--teal)">${esc(r[1])}</span></span>${r[2]?`<span class="small">${esc(r[2])}</span>`:""}</div></div>`).join("")}
+  <span class="small" style="padding-top:6px">Sacado de la configuración de tu liga en Futmondo. Si algo no cuadra con lo que ves en la app, avísame.</span></div>`;
+}
 function viewLiga(){
   const T = B.pujas_liga.tramos;
-  return `<div class="stack">${header("Liga","")}
+  return `<div class="stack">${header("Liga","")}${reglas()}
   <div class="glass card"><table><tr><th>#</th><th>Equipo</th><th class="r">Pts</th><th class="r">Once</th></tr>
   ${B.tabla.map(t => `<tr class="${t.es_mio?"me":""}"><td>${t.pos}</td><td>${esc(short(t.equipo))}</td><td class="r">${nf(t.puntos)}</td><td class="r">${nf(t.xi_proyectado)}</td></tr>`).join("")}</table></div>
   <div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Cuánto se paga en tu liga</span>
@@ -418,8 +449,10 @@ function openPlayer(id){
     <div class="between"><button class="icon-btn" id="closeSheet" aria-label="Cerrar"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EAF2F0" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>${verdict?`<span class="tag t-${verdict}" style="font-size:12px;padding:6px 10px">${verdict}</span>`:""}</div>
     <div class="row" style="gap:14px"><div class="avatar" style="width:64px;height:64px;border-radius:32px;font-size:20px;background:rgba(45,212,191,0.20);border:1px solid rgba(94,234,212,0.45);color:var(--mint)">${esc(p.name.split(" ").map(w=>w[0]).join("").slice(0,2))}</div>
     <div class="stack" style="gap:2px"><span class="num" style="font-size:26px;font-weight:700">${esc(p.name)}</span><span class="muted" style="font-size:14px">${esc(ROLE_ES[p.role]||p.role)} · ${esc(p.club)} · ${esc(owner)}</span></div></div>
+    ${p.alertas && p.alertas.length ? `<div class="note" style="background:var(--bad-bg);color:var(--bad)"><b>${p.fuera_liga?"No juega en tu liga.":"Dato raro, revísalo en Futmondo."}</b> ${esc(p.alertas.join("; "))}.</div>` : ""}
     ${gain!=null?`<div class="hero" style="gap:6px;padding:18px 20px"><span style="font-size:13px;color:var(--hero-ink)">Impacto en tu once</span><div class="row" style="align-items:baseline;gap:8px"><span class="num" style="font-size:44px;font-weight:700;line-height:1;color:var(--mint)">${sg(gain)}</span><span>pts por jornada</span></div><span style="font-size:14px;color:var(--hero-ink)">${desplaza.length?`Entraría por ${esc(desplaza.join(", "))} · `:""}${starts} de las últimas 6 de titular</span></div>`:""}
     ${money}
+    ${viabilidad(f.mkt || f.cl)}
     ${rounds.length?`<div class="glass card stack" style="gap:12px"><div class="between"><span style="font-size:15px;font-weight:700">Jornada a jornada</span><div class="row small" style="gap:12px"><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:var(--teal)"></i>Titular</span><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:rgba(94,234,212,0.35)"></i>Suplente</span></div></div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px;align-items:end;height:120px" role="img" aria-label="Puntos por jornada: ${rounds.map(r=>"J"+r[0]+" "+nf(r[1])).join(", ")}">${rounds.map(r => `<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;height:120px"><span style="font-size:10px;color:var(--ink4);font-weight:600">${nf(r[1],r[1]%1?1:0)}</span><div style="width:100%;border-radius:4px 4px 0 0;height:${Math.max(3,Math.round(Math.max(0,r[1])/mx*92))}px;background:${!r[1]?"rgba(255,255,255,0.14)":r[2]?"var(--teal)":"rgba(94,234,212,0.35)"}"></div></div>`).join("")}</div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px">${rounds.map(r=>`<span style="font-size:10px;color:var(--ink3);text-align:center">J${r[0]}</span>`).join("")}</div></div>`:""}
@@ -430,12 +463,40 @@ function openPlayer(id){
   $("#sheetWrap").classList.add("open");
   $("#closeSheet").onclick = closeSheet;
 }
+function viabilidad(t){
+  if (!t || !t.operaciones) return "";
+  const s = saldo(), cost = t.puja ? t.puja.objetivo_M : t.clausula_max_M;
+  const ops = [...t.operaciones].sort((a,b) => b.mejora_neta - a.mejora_neta);
+  const direct = { vende: [], ingresa_M: 0, necesitas_M: cost, mejora_neta: t.mejora_xi, rentable: true };
+  const all = [direct, ...ops.filter(o => o.vende.length)];
+  const row = o => {
+    const can = s != null && s >= o.necesitas_M;
+    const after = s != null ? s - o.necesitas_M : null;
+    return `<div class="list-row" style="cursor:default;align-items:flex-start;${o.rentable?"":"opacity:.6"}">
+      <div style="flex:1" class="stack"><span style="font-size:14px;font-weight:600;gap:0">${o.vende.length ? "Vendiendo a " + esc(o.vende.join(", ")) : "Sin vender a nadie"}</span>
+      <span class="small" style="margin-top:-10px">${o.vende.length ? `Ingresas ~${M(o.ingresa_M)} · ` : ""}necesitas ${o.necesitas_M <= 0 ? "0 M (te sobran " + M(-o.necesitas_M) + ")" : M(o.necesitas_M) + " de saldo"}${after!=null ? ` · te quedarías en ${after<0?"−"+M(-after):M(after)}` : ""}</span>
+      ${o.rentable ? "" : `<span class="small" style="margin-top:-10px;color:var(--amber)">No compensa: pierdes casi tanto como ganas</span>`}</div>
+      <div class="stack" style="gap:2px;align-items:flex-end"><b class="num" style="font-size:18px;color:${o.mejora_neta>=1?"var(--good)":"var(--ink4)"}">${sg(o.mejora_neta)}</b>
+      ${s==null?"":`<span class="tag ${can?"t-PUJAR":"t-PASAR"}">${can?"PUEDES":"NO LLEGAS"}</span>`}</div></div>`;
+  };
+  const checks = [...(t.antes_de_pagar || [])];
+  const bestCan = all.filter(o => o.rentable && s != null && s >= o.necesitas_M).sort((a,b)=>b.mejora_neta-a.mejora_neta)[0];
+  if (s != null) checks.push({ txt: "Te deja con saldo positivo", ok: !!bestCan, nota: bestCan ? null : "con tu saldo actual ninguna opción rentable te deja en positivo" });
+  const ic = ok => ok === true ? `<span style="color:var(--good);font-weight:700">✓</span>` : ok === false ? `<span style="color:var(--bad);font-weight:700">✕</span>` : `<span style="color:var(--blue);font-weight:700">i</span>`;
+  return `<div class="glass card stack" style="gap:6px"><div class="between"><span style="font-size:15px;font-weight:700">¿Cómo pagarlo?</span><span class="small">pts/jornada netos</span></div>
+    <span class="small">El efecto en tu once ya descuenta a los que vendes. Ventas a valor de mercado, aproximado.</span>
+    ${all.map(row).join("")}</div>
+    <div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Antes de pagar</span>
+    ${checks.map(c => `<div class="row" style="align-items:flex-start;gap:10px">${ic(c.ok)}<div class="stack" style="gap:0"><span style="font-size:14px">${esc(c.txt)}</span>${c.nota?`<span class="small">${esc(c.nota)}</span>`:""}</div></div>`).join("")}
+    ${B.liga && B.liga.playerMoveInDays ? `<span class="small">En tu liga los fichajes por cláusula llegan ${B.liga.playerMoveInDays} día(s) después de pagar.</span>` : ""}</div>`;
+}
 function closeSheet(){ $("#sheetWrap").classList.remove("open"); }
 function openSaldo(){
   const s = saldo();
   $("#sheet").innerHTML = `<div class="grab"></div><div class="stack"><span class="h2">Tu saldo</span><span class="muted">Futmondo no lo da por la API. Se guarda solo en este móvil y sirve para filtrar lo que puedes pagar.</span>
   <div class="seg" role="group" aria-label="Signo del saldo"><button id="sgPos" class="${s==null||s>=0?"on":""}">Tengo dinero</button><button id="sgNeg" class="${s!=null&&s<0?"on":""}">Estoy en deuda</button></div>
   <label class="small" for="saldoIn">Cantidad en millones</label><input class="field" id="saldoIn" inputmode="decimal" placeholder="1,18" value="${s==null?"":nf(Math.abs(s),2)}">
+  ${(() => { const me = B.tabla.find(t=>t.es_mio); return me ? `<span class="small">En tu liga puedes pujar hasta tu saldo + el 50% del valor de tu equipo (${M(me.valor_M*0.5)}), aunque te deje en deuda.</span>` : ""; })()}
   <button class="btn primary" id="saldoOk">Guardar</button>${s!=null?`<button class="btn" id="saldoDel">Quitar saldo</button>`:""}</div>`;
   $("#sheetWrap").classList.add("open");
   let neg = s != null && s < 0;
