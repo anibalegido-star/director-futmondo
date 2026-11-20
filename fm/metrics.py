@@ -110,7 +110,7 @@ def player_metrics(p, summary=None, rounds=None, season_rounds=None):
 REPLACEMENT = 3.0  # un hueco vacío se cubre con un fichaje barato de ~3 pts/jornada
 
 
-def best_xi(players, key="proj_next"):
+def best_xi(players, key="proj_next", repl=None):
     """Mejor once posible respetando formaciones legales. Devuelve (puntos, ids, formación).
 
     Los huecos sin jugador se rellenan con un suplente virtual de nivel REPLACEMENT,
@@ -119,7 +119,7 @@ def best_xi(players, key="proj_next"):
     by_role = {}
     for r in ROLES:
         lst = sorted((pl for pl in players if pl["role"] == r), key=lambda x: -x[key])
-        lst += [{"id": None, key: REPLACEMENT}] * 5
+        lst += [{"id": None, key: REPLACEMENT if repl is None else repl}] * 5
         by_role[r] = lst
     if not by_role["portero"]:
         gk_pts, gk = 0.0, []
