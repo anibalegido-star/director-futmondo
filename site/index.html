@@ -301,6 +301,7 @@ function viewHoy(){
     </button>`).join("") || `<p class="muted">Nada urgente hoy.</p>`}</div>
   ${noticias()}
   ${movimientos()}
+  ${cajaCard()}
   <p class="small center">Datos de ${esc(new Date(B.captura).toLocaleString("es-ES",{weekday:"short",hour:"2-digit",minute:"2-digit"}))} · confirma precios en Futmondo antes de pagar</p>
   </div>`;
 }
@@ -344,6 +345,20 @@ function viewRevision(){
     <div class="grid3"><div class="stat"><b>${nf(S.director_total)}</b><span>con mi once</span></div><div class="stat"><b>${nf(S.tu_total)}</b><span>con el tuyo</span></div><div class="stat"><b>${nf(S.ideal_total)}</b><span>ideal</span></div></div>
     <span class="small">Cambiaste algo en ${S.jornadas_con_cambios} jornada${S.jornadas_con_cambios===1?"":"s"}: ${S.cambios_acertados} acierto${S.cambios_acertados===1?"":"s"}, ${S.cambios_fallados} fallo${S.cambios_fallados===1?"":"s"}.</span></div>` : "";
   return `<div class="stack">${head}${temporada}${sel}${top}${cambios}${fallos}${banq}${ideal}</div>`;
+}
+function cajaCard(){
+  const C = B.caja; if (!C) return "";
+  const s = saldo(), mv = B.mis_jugadores_en_venta || [];
+  const ventas = mv.reduce((a,p) => a + (p.precio_salida_M||0), 0);
+  let linea;
+  if (s == null) linea = `Pulsa tu saldo arriba para ver cuándo podrás volver a fichar.`;
+  else if (s < 0) {
+    const j = Math.ceil(-s / C.ingreso_jornada_M);
+    linea = `Con ${M(-s)} de deuda, solo con puntos saldrías en unas <b>${j} jornada${j>1?"s":""}</b>.${ventas?` Si se venden ${mv.map(p=>esc(p.name)).join(", ")} al precio de salida, te quedarían unos ${M(s+ventas)}.`:""}`;
+  } else linea = `Tienes ${M(s)}. Dentro de 4 jornadas, sin comprar ni vender, tendrías unos ${M(s + 4*C.ingreso_jornada_M)}.`;
+  return `<div class="glass card stack" style="gap:8px"><div class="between"><span style="font-size:15px;font-weight:700">Caja</span><span class="small">+${M(C.ingreso_jornada_M)} por jornada</span></div>
+  <span class="small" style="font-size:13px;line-height:1.5">${linea}</span>
+  <span class="small">Ingreso estimado: ${nf(C.puntos_jornada,0)} pts por jornada × ${nf(C.euros_por_punto/1000,0)}.000 €. Hasta final de temporada, unos ${M(C.ingreso_resto_M)}.${s!=null&&s<0?" Comprueba en Futmondo si estar en negativo cuando empieza la jornada te penaliza.":""}</span></div>`;
 }
 function movimientos(){
   const tp = B.traspasos_pendientes || [], mv = B.mis_jugadores_en_venta || [];
@@ -447,7 +462,7 @@ function viewRivales(){
   <span class="h2" style="padding-top:4px">Tus rivales cercanos</span>
   ${near.map(r => `<div class="glass card stack" style="gap:12px"><div class="row"><div class="avatar" style="border-radius:12px;font-size:16px">${r.pos}</div><div class="stack" style="flex:1;gap:2px"><span class="pname">${esc(short(r.equipo))}</span><span class="small">Once ${nf(r.xi_proyectado)} · valor ${M(r.valor_M)}</span></div><div class="stack" style="gap:0;align-items:flex-end"><span class="num" style="font-size:20px;font-weight:700;${r.gap_conmigo<0?"color:var(--bad)":""}">${sg(r.gap_conmigo)}</span><span class="small">pts</span></div></div>
   <div class="row" style="flex-wrap:wrap;gap:6px"><span class="tag t-DATOS" style="font-size:12px;border-radius:999px;padding:4px 9px;letter-spacing:0;font-weight:600">${esc(r.estrella)} · ${nf(r.dependencia_pct,0)}%</span>${r.posicion_debil?`<span class="tag t-DATOS" style="font-size:12px;border-radius:999px;padding:4px 9px;letter-spacing:0;font-weight:600">Flojo en ${esc(ROLE_ES[r.posicion_debil].toLowerCase())}</span>`:""}${r.perfil.filter(x=>x!=="perfil discreto"&&x!=="depende de su estrella").map(x=>`<span class="tag t-DATOS" style="font-size:12px;border-radius:999px;padding:4px 9px;letter-spacing:0;font-weight:600">${esc(x)}${x==="cazador de cláusulas"?` · ${r.clausulazos_hechos}`:""}</span>`).join("")}</div>
-  <span style="font-size:13px;line-height:1.45;color:var(--ink4)">${esc(read(r))}</span></div>`).join("")}
+  <span style="font-size:13px;line-height:1.45;color:var(--ink4)">${esc(read(r))}${r.flujo_30d&&Math.abs(r.flujo_30d.compras_M-r.flujo_30d.ventas_M)>=5?` En 30 días ha ${r.flujo_30d.compras_M>r.flujo_30d.ventas_M?`gastado ${M(r.flujo_30d.compras_M-r.flujo_30d.ventas_M)} más de lo que ha vendido: puede andar justo de dinero.`:`vendido ${M(r.flujo_30d.ventas_M-r.flujo_30d.compras_M)} más de lo que ha comprado: puede tener caja para clausulazos.`}`:""}</span></div>`).join("")}
   </div>`;
 }
 
@@ -467,9 +482,36 @@ function reglas(){
   ${R.map(r => `<div class="list-row" style="cursor:default;align-items:flex-start"><div class="stack" style="gap:2px;flex:1"><span style="font-size:14px;font-weight:600">${esc(r[0])}: <span style="color:var(--teal)">${esc(r[1])}</span></span>${r[2]?`<span class="small">${esc(r[2])}</span>`:""}</div></div>`).join("")}
   <span class="small" style="padding-top:6px">Sacado de la configuración de tu liga en Futmondo. Si algo no cuadra con lo que ves en la app, avísame.</span></div>`;
 }
+function temporadaCard(){
+  const T = B.temporada; if (!T) return "";
+  const n = T.distribucion.length, mx = Math.max(...T.distribucion), cur = T.posicion_actual;
+  const bars = T.distribucion.map((p,i) => `<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1" title="${i+1}º: ${nf(p*100,0)}%">
+    <span class="small num" style="font-size:10px;min-height:13px">${p>=0.02?nf(p*100,0)+"%":""}</span>
+    <div style="width:100%;max-width:22px;height:${Math.max(2,Math.round(p/mx*90))}px;border-radius:4px 4px 0 0;background:${i+1===cur?"var(--teal)":"rgba(94,234,212,0.38)"}"></div>
+    <span class="small num" style="font-size:11px;${i+1===cur?"color:var(--teal);font-weight:700":""}">${i+1}</span></div>`).join("");
+  const s2 = T.sensibilidad.find(x=>x.extra===2), s4 = T.sensibilidad.find(x=>x.extra===4);
+  const pf = T.puntos_finales;
+  return `<div class="glass card stack" style="gap:10px">
+  <div class="between"><span style="font-size:15px;font-weight:700">Final de temporada</span><span class="small">${T.jornadas_restantes} jornadas por jugar</span></div>
+  <div class="grid3"><div class="stat"><b>${nf(T.posicion_esperada,1)}º</b><span>posición esperada</span></div><div class="stat"><b style="color:var(--good)">${nf(T.prob_subir*100,0)}%</b><span>de acabar por encima del ${cur}º</span></div><div class="stat"><b style="color:${T.prob_bajar>0.2?"var(--bad)":"var(--ink)"}">${nf(T.prob_bajar*100,0)}%</b><span>de acabar por debajo</span></div></div>
+  <div role="img" aria-label="Probabilidad de cada posición final" style="display:flex;align-items:flex-end;gap:3px;padding-top:4px">${bars}</div>
+  <span class="small">Probabilidad de cada puesto final si sigues al ritmo de ahora (${nf(T.mi_ritmo,0)} pts por jornada). Acabarías con ${pf.p10}–${pf.p90} pts.</span>
+  <span class="small">Con <b>+2 pts por jornada</b> acabarías de media ${nf(s2.esperada,1)}º; con <b>+4</b>, ${nf(s4.esperada,1)}º. Por eso cada fichaje te dice cuánto mueve tu posición final.</span>
+  ${T.perfil?`<div class="row" style="gap:8px;align-items:flex-start"><span class="tag ${T.perfil.modo==="arriesgar"?"t-VIGILAR":T.perfil.modo==="conservar"?"t-PUJAR":"t-DATOS"}">${T.perfil.modo==="arriesgar"?"ARRIESGAR":T.perfil.modo==="conservar"?"CONSERVAR":"EQUILIBRIO"}</span><span class="small" style="flex:1">${esc(T.perfil.texto)}</span></div>`:""}
+  </div>`;
+}
+function lineasCard(){
+  const T = B.temporada; if (!T || !T.lineas) return "";
+  const L = T.lineas, ext = Math.max(1, ...L.map(l => Math.abs(l.diferencia)));
+  return `<div class="glass card stack" style="gap:10px"><div class="between"><span style="font-size:15px;font-weight:700">Dónde reforzar</span><span class="small">tu once vs media de la liga</span></div>
+  ${L.map(l => `<div style="display:grid;grid-template-columns:96px minmax(0,1fr) 46px;gap:8px;align-items:center"><span style="font-size:13px">${esc(ROLE_ES[l.linea])}</span>
+    <div style="position:relative;height:10px"><div style="position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--glass-line)"></div><div style="position:absolute;top:0;height:10px;border-radius:4px;${l.diferencia<0?`right:50%;width:${Math.abs(l.diferencia)/ext*50}%;background:var(--bad)`:`left:50%;width:${l.diferencia/ext*50}%;background:var(--good)`}"></div></div>
+    <span class="num" style="font-size:13px;font-weight:700;text-align:right">${sg(l.diferencia)}</span></div>`).join("")}
+  <span class="small">Puntos por jugador y jornada frente a los once de tus rivales. ${L[0].diferencia < -1 ? `Tu prioridad es ${esc(ROLE_ES[L[0].linea].toLowerCase())}: ${nf(L[0].mi_media_xi)} pts por jugador contra ${nf(L[0].media_liga_xi)} de media.` : "Ninguna línea está muy por debajo."}${L[L.length-1].diferencia > 1 ? ` Te sobra nivel en ${esc(ROLE_ES[L[L.length-1].linea].toLowerCase())}: de ahí puede salir dinero.` : ""}</span></div>`;
+}
 function viewLiga(){
   const T = B.pujas_liga.tramos;
-  return `<div class="stack">${header("Liga","")}${reglas()}
+  return `<div class="stack">${header("Liga","")}${temporadaCard()}${lineasCard()}${reglas()}
   <div class="glass card"><table><tr><th>#</th><th>Equipo</th><th class="r">Pts</th><th class="r">Once</th></tr>
   ${B.tabla.map(t => `<tr class="${t.es_mio?"me":""}"><td>${t.pos}</td><td>${esc(short(t.equipo))}</td><td class="r">${nf(t.puntos)}</td><td class="r">${nf(t.xi_proyectado)}</td></tr>`).join("")}</table></div>
   <div class="glass card stack" style="gap:8px"><span style="font-size:15px;font-weight:700">Cuánto se paga en tu liga</span>
@@ -503,14 +545,14 @@ function openPlayer(id){
     <div class="row" style="gap:14px"><div class="avatar" style="width:64px;height:64px;border-radius:32px;font-size:20px;background:rgba(45,212,191,0.20);border:1px solid rgba(94,234,212,0.45);color:var(--mint)">${esc(p.name.split(" ").map(w=>w[0]).join("").slice(0,2))}</div>
     <div class="stack" style="gap:2px"><span class="num" style="font-size:26px;font-weight:700">${esc(p.name)}</span><span class="muted" style="font-size:14px">${esc(ROLE_ES[p.role]||p.role)} · ${esc(p.club)} · ${esc(owner)}</span></div></div>
     ${p.alertas && p.alertas.length ? `<div class="note" style="background:var(--bad-bg);color:var(--bad)"><b>${p.fuera_liga?"No juega en tu liga.":"Dato raro, revísalo en Futmondo."}</b> ${esc(p.alertas.join("; "))}.</div>` : ""}
-    ${gain!=null?`<div class="hero" style="gap:6px;padding:18px 20px"><span style="font-size:13px;color:var(--hero-ink)">Impacto en tu once</span><div class="row" style="align-items:baseline;gap:8px"><span class="num" style="font-size:44px;font-weight:700;line-height:1;color:var(--mint)">${sg(gain)}</span><span>pts por jornada</span></div><span style="font-size:14px;color:var(--hero-ink)">${desplaza.length?`Entraría por ${esc(desplaza.join(", "))} · `:""}${starts} de las últimas 6 de titular</span></div>`:""}
+    ${gain!=null?`<div class="hero" style="gap:6px;padding:18px 20px"><span style="font-size:13px;color:var(--hero-ink)">Impacto en tu once</span><div class="row" style="align-items:baseline;gap:8px"><span class="num" style="font-size:44px;font-weight:700;line-height:1;color:var(--mint)">${sg(gain)}</span><span>pts por jornada</span></div><span style="font-size:14px;color:var(--hero-ink)">${desplaza.length?`Entraría por ${esc(desplaza.join(", "))} · `:""}${starts} de las últimas 6 de titular</span>${(()=>{const e=(f.mkt||f.cl||{}).efecto_posicion; return e!=null&&e<=-0.05?`<span style="font-size:14px;color:var(--hero-ink)">Posición final esperada: ${nf(B.temporada.posicion_esperada,1)}º → <b style="color:var(--mint)">${nf(B.temporada.posicion_esperada+e,1)}º</b></span>`:"";})()}</div>`:""}
     ${money}
     ${proximos(p)}
     ${viabilidad(f.mkt || f.cl)}
     ${rounds.length?`<div class="glass card stack" style="gap:12px"><div class="between"><span style="font-size:15px;font-weight:700">Jornada a jornada</span><div class="row small" style="gap:12px"><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:var(--teal)"></i>Titular</span><span class="row" style="gap:4px"><i style="width:8px;height:8px;border-radius:2px;background:rgba(94,234,212,0.35)"></i>Suplente</span></div></div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px;align-items:end;height:120px" role="img" aria-label="Puntos por jornada: ${rounds.map(r=>"J"+r[0]+" "+nf(r[1])).join(", ")}">${rounds.map(r => `<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;height:120px"><span style="font-size:10px;color:var(--ink4);font-weight:600">${nf(r[1],r[1]%1?1:0)}</span><div style="width:100%;border-radius:4px 4px 0 0;height:${Math.max(3,Math.round(Math.max(0,r[1])/mx*92))}px;background:${!r[1]?"rgba(255,255,255,0.14)":r[2]?"var(--teal)":"rgba(94,234,212,0.35)"}"></div></div>`).join("")}</div>
     <div style="display:grid;grid-template-columns:repeat(${rounds.length},minmax(0,1fr));gap:4px">${rounds.map(r=>`<span style="font-size:10px;color:var(--ink3);text-align:center">J${r[0]}</span>`).join("")}</div></div>`:""}
-    <div class="grid2"><div class="glass card stat"><span>Media / últ. 5</span><b>${nf(p.avg,2)} / ${nf(p.avg5,2)}</b></div><div class="glass card stat"><span>Proyección</span><b>${nf(p.proj)} pts</b></div>
+    <div class="grid2"><div class="glass card stat"><span>Media / últ. 5</span><b>${nf(p.avg,2)} / ${nf(p.avg5,2)}</b></div><div class="glass card stat"><span>Proyección</span><b>${nf(p.proj)} pts</b></div>${p.techo!=null?`<div class="glass card stat"><span>Techo / suelo</span><b>${nf(p.techo)} / ${nf(p.suelo)}</b><span class="small">1 de cada 4 jornadas hace ${nf(p.techo)} o más${B.temporada&&B.temporada.perfil&&B.temporada.perfil.modo==="arriesgar"&&p.techo>=9?" · el techo que te interesa":""}</span></div>`:""}
     <div class="glass card stat"><span>Valor</span><b>${M(p.value_M)}</b>${trendTxt(p)?`<span style="display:block;margin-top:2px">${trendTxt(p)}</span>`:""}</div><div class="glass card stat"><span>Partidos</span><b>${p.matches} de ${B.situacion.jornada_aprox}</b></div></div>
     <a class="btn primary" href="https://www.futmondo.com/" target="_blank" rel="noopener">Abrir Futmondo</a>
     <span class="small center">Las pujas y cláusulas las haces tú en Futmondo</span></div>`;
